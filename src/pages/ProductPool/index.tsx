@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import {
@@ -19,6 +19,8 @@ import {
   AlertCircle,
   FileSpreadsheet,
   Check,
+  Download,
+  ArrowRight,
 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
@@ -35,7 +37,27 @@ interface ImportPreviewItem {
   row: ImportedProductRow;
   errors: string[];
   isValid: boolean;
+  mappedRow: Record<string, any>;
 }
+
+const FIELD_OPTIONS = [
+  { value: 'sku', label: 'SKU' },
+  { value: 'name', label: '商品名称' },
+  { value: 'category', label: '类目' },
+  { value: 'costPrice', label: '成本价' },
+  { value: 'salePrice', label: '售价' },
+  { value: 'stock', label: '库存' },
+  { value: '_skip', label: '跳过该列' },
+];
+
+const FIELD_AUTO_MATCH: Record<string, string[]> = {
+  sku: ['sku', 'SKU', '商品SKU', '编码', '货号'],
+  name: ['name', '商品名称', '名称', '商品名', '品名', '标题'],
+  category: ['category', '类目', '分类', '品类', '商品类目'],
+  costPrice: ['costPrice', '成本价', '成本', '进价', 'cost_price', '采购价'],
+  salePrice: ['salePrice', '售价', '价格', 'sale_price', '销售价', '零售价', '标价'],
+  stock: ['stock', '库存', '库存量', '数量', '可售库存'],
+};
 
 export default function ProductPool() {
   const navigate = useNavigate();
@@ -59,11 +81,14 @@ export default function ProductPool() {
   const [selectedShop, setSelectedShop] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
 
-  const [importStep, setImportStep] = useState<'upload' | 'preview' | 'success'>('upload');
+  const [importStep, setImportStep] = useState<'upload' | 'mapping' | 'preview' | 'success'>('upload');
   const [importShopId, setImportShopId] = useState('');
   const [previewData, setPreviewData] = useState<ImportPreviewItem[]>([]);
   const [isSyncing, setIsSyncing] = useState<string | null>(null);
   const [importedCount, setImportedCount] = useState(0);
+  const [rawHeaders, setRawHeaders] = useState<string[]>([]);
+  const [headerMapping, setHeaderMapping] = useState<Record<string, string>>({});
+  const [rawRows, setRawRows] = useState<Record<string, any>[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filteredProducts = useMemo(() => {
@@ -93,6 +118,30 @@ export default function ProductPool() {
     navigate('/activities');
   };
 
+  const handleDownloadTemplate = () => {
+    const headers = ['SKU', '商品名称', '类目', '成本价', '售价', '库存'];
+    const sampleRows = [
+      ['SKU001', '示例商品A', '服饰', 50, 99, 200],
+      ['SKU002', '示例商品B', '数码', 120, 259, 150],
+      ['SKU003', '示例商品C', '美妆', 30, 79, 300],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleRows]);
+    ws['!cols'] = [{ wch: 15 }, { wch: 20 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '商品导入模板');
+    XLSX.writeFile(wb, '商品导入模板.xlsx');
+  };
+
+  const autoMatchHeader = (header: string): string => {
+    const lower = header.trim().toLowerCase();
+    for (const [field, keywords] of Object.entries(FIELD_AUTO_MATCH)) {
+      if (keywords.some((kw) => kw.toLowerCase() === lower || lower.includes(kw.toLowerCase()))) {
+        return field;
+      }
+    }
+    return '_skip';
+  };
+
   const handleFileUpload = (file: File) => {
     if (!file) return;
     const reader = new FileReader();
@@ -102,32 +151,63 @@ export default function ProductPool() {
         const workbook = XLSX.read(data, { type: 'array' });
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
-        const json: ImportedProductRow[] = XLSX.utils.sheet_to_json(sheet);
+        const json: Record<string, any>[] = XLSX.utils.sheet_to_json(sheet);
 
-        const preview: ImportPreviewItem[] = json.slice(0, 50).map((row) => {
-          const errors: string[] = [];
-          if (!row.name && !row['商品名称'] && !row['名称']) errors.push('缺少商品名称');
-          if (!row.sku && !row['SKU'] && !row['sku']) errors.push('缺少SKU');
-          const price = Number(row.salePrice || row['售价'] || row['价格'] || row.sale_price);
-          const cost = Number(row.costPrice || row['成本价'] || row['成本'] || row.cost_price);
-          if (isNaN(price) || price <= 0) errors.push('售价无效');
-          if (isNaN(cost) || cost <= 0) errors.push('成本价无效');
-          if (!isNaN(price) && !isNaN(cost) && cost > price) errors.push('成本价高于售价');
+        if (json.length === 0) {
+          alert('文件中没有数据');
+          return;
+        }
 
-          return {
-            row,
-            errors,
-            isValid: errors.length === 0,
-          };
+        const headers = Object.keys(json[0]);
+        const initialMapping: Record<string, string> = {};
+        headers.forEach((h) => {
+          initialMapping[h] = autoMatchHeader(h);
         });
 
-        setPreviewData(preview);
-        setImportStep('preview');
+        setRawHeaders(headers);
+        setHeaderMapping(initialMapping);
+        setRawRows(json);
+        setImportStep('mapping');
       } catch (err) {
         alert('文件解析失败，请检查文件格式');
       }
     };
     reader.readAsArrayBuffer(file);
+  };
+
+  const handleMappingNext = () => {
+    const mappedFields = Object.values(headerMapping).filter((v) => v !== '_skip');
+    if (!mappedFields.includes('name') && !mappedFields.includes('salePrice')) {
+      alert('请至少映射「商品名称」和「售价」两列');
+      return;
+    }
+
+    const preview: ImportPreviewItem[] = rawRows.map((row) => {
+      const mapped: Record<string, any> = {};
+      for (const [header, field] of Object.entries(headerMapping)) {
+        if (field !== '_skip') {
+          mapped[field] = row[header];
+        }
+      }
+
+      const errors: string[] = [];
+      if (!mapped.name) errors.push('缺少商品名称');
+      const price = Number(mapped.salePrice);
+      const cost = Number(mapped.costPrice);
+      if (isNaN(price) || price <= 0) errors.push('售价无效');
+      if (mapped.costPrice !== undefined && (isNaN(cost) || cost <= 0)) errors.push('成本价无效');
+      if (!isNaN(price) && !isNaN(cost) && cost > price) errors.push('成本价高于售价');
+
+      return {
+        row: mapped as ImportedProductRow,
+        errors,
+        isValid: errors.length === 0,
+        mappedRow: mapped,
+      };
+    });
+
+    setPreviewData(preview);
+    setImportStep('preview');
   };
 
   const handleConfirmImport = () => {
@@ -143,16 +223,16 @@ export default function ProductPool() {
     }
 
     const newProducts = validItems.map((item) => {
-      const r = item.row;
-      const salePrice = Number(r.salePrice || r['售价'] || r['价格'] || r.sale_price) || 0;
-      const costPrice = Number(r.costPrice || r['成本价'] || r['成本'] || r.cost_price) || 0;
+      const r = item.mappedRow;
+      const salePrice = Number(r.salePrice) || 0;
+      const costPrice = Number(r.costPrice) || 0;
       return {
-        sku: String(r.sku || r['SKU'] || r['sku'] || `SKU${Date.now()}`),
-        name: String(r.name || r['商品名称'] || r['名称'] || '未命名商品'),
-        category: String(r.category || r['类目'] || r['分类'] || '其他'),
+        sku: String(r.sku || `SKU${Date.now()}`),
+        name: String(r.name || '未命名商品'),
+        category: String(r.category || '其他'),
         costPrice,
         salePrice,
-        stock: Number(r.stock || r['库存'] || 100),
+        stock: Number(r.stock || 100),
         margin: salePrice > 0 ? Math.round(((salePrice - costPrice) / salePrice) * 100) : 0,
         shopId: importShopId,
         image: `https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=ecommerce%20product&image_size=square`,
@@ -179,6 +259,9 @@ export default function ProductPool() {
     setPreviewData([]);
     setImportShopId('');
     setImportedCount(0);
+    setRawHeaders([]);
+    setHeaderMapping({});
+    setRawRows([]);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -199,6 +282,11 @@ export default function ProductPool() {
     if (margin < 20) return <Badge variant="danger">{margin}%</Badge>;
     if (margin < 40) return <Badge variant="warning">{margin}%</Badge>;
     return <Badge variant="success">{margin}%</Badge>;
+  };
+
+  const mappedFieldLabel = (field: string) => {
+    const opt = FIELD_OPTIONS.find((o) => o.value === field);
+    return opt ? opt.label : field;
   };
 
   return (
@@ -450,13 +538,20 @@ export default function ProductPool() {
       <Modal
         isOpen={showImportModal}
         onClose={closeImportModal}
-        title={importStep === 'success' ? '导入成功' : '导入商品'}
+        title={
+          importStep === 'success' ? '导入成功' :
+          importStep === 'mapping' ? '匹配表头' :
+          importStep === 'preview' ? '数据预览' :
+          '导入商品'
+        }
         description={
           importStep === 'success'
             ? '商品已成功导入到商品池'
+            : importStep === 'mapping'
+            ? '将 Excel 列名映射到系统字段，确认后预览数据'
             : '支持 Excel 批量导入或从店铺同步商品数据'
         }
-        size={importStep === 'preview' ? 'xl' : 'md'}
+        size={importStep === 'preview' || importStep === 'mapping' ? 'xl' : 'md'}
       >
         {importStep === 'upload' && (
           <div className="space-y-6">
@@ -481,6 +576,14 @@ export default function ProductPool() {
                 选择文件
               </Button>
             </div>
+
+            <div className="flex items-center justify-center gap-3">
+              <Button variant="outline" onClick={handleDownloadTemplate}>
+                <Download className="w-4 h-4 mr-2" />
+                下载导入模板
+              </Button>
+            </div>
+
             <div className="relative">
               <div className="absolute inset-0 flex items-center">
                 <div className="w-full border-t border-slate-200"></div>
@@ -525,6 +628,62 @@ export default function ProductPool() {
                   </Button>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {importStep === 'mapping' && (
+          <div className="space-y-4">
+            <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
+              <div className="flex items-start gap-3">
+                <FileSpreadsheet className="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-medium text-blue-800">
+                    已识别 {rawHeaders.length} 列、{rawRows.length} 行数据
+                  </p>
+                  <p className="text-sm text-blue-600 mt-1">
+                    请确认系统自动匹配的字段是否正确，可手动调整
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="border border-slate-200 rounded-xl overflow-hidden">
+              <div className="grid grid-cols-2 gap-px bg-slate-200">
+                <div className="bg-slate-50 px-4 py-3 font-semibold text-sm text-slate-700">Excel 列名</div>
+                <div className="bg-slate-50 px-4 py-3 font-semibold text-sm text-slate-700">映射到系统字段</div>
+              </div>
+              {rawHeaders.map((header) => (
+                <div key={header} className="grid grid-cols-2 gap-px bg-slate-200">
+                  <div className="bg-white px-4 py-3 flex items-center gap-2">
+                    <span className="text-sm text-slate-800 font-medium">{header}</span>
+                    <span className="text-xs text-slate-400">
+                      示例: {String(rawRows[0]?.[header] ?? '-').slice(0, 20)}
+                    </span>
+                  </div>
+                  <div className="bg-white px-4 py-3">
+                    <Select
+                      value={headerMapping[header] || '_skip'}
+                      onChange={(e) => setHeaderMapping({ ...headerMapping, [header]: e.target.value })}
+                    >
+                      {FIELD_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </Select>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex justify-between">
+              <Button variant="ghost" onClick={() => setImportStep('upload')}>
+                <X className="w-4 h-4 mr-2" />
+                返回上传
+              </Button>
+              <Button onClick={handleMappingNext}>
+                下一步：预览数据
+                <ArrowRight className="w-4 h-4 ml-2" />
+              </Button>
             </div>
           </div>
         )}
@@ -588,19 +747,19 @@ export default function ProductPool() {
                           )}
                         </TableCell>
                         <TableCell className="font-mono text-sm text-slate-600">
-                          {String(item.row.sku || item.row['SKU'] || item.row['sku'] || '-')}
+                          {String(item.mappedRow.sku || '-')}
                         </TableCell>
                         <TableCell>
-                          {String(item.row.name || item.row['商品名称'] || item.row['名称'] || '-')}
+                          {String(item.mappedRow.name || '-')}
                         </TableCell>
                         <TableCell className="text-right">
-                          {formatCurrency(Number(item.row.salePrice || item.row['售价'] || 0))}
+                          {formatCurrency(Number(item.mappedRow.salePrice || 0))}
                         </TableCell>
                         <TableCell className="text-right">
-                          {formatCurrency(Number(item.row.costPrice || item.row['成本价'] || 0))}
+                          {formatCurrency(Number(item.mappedRow.costPrice || 0))}
                         </TableCell>
                         <TableCell className="text-right">
-                          {Number(item.row.stock || item.row['库存'] || 0).toLocaleString()}
+                          {Number(item.mappedRow.stock || 0).toLocaleString()}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -610,9 +769,9 @@ export default function ProductPool() {
             </div>
 
             <div className="flex justify-between">
-              <Button variant="ghost" onClick={() => setImportStep('upload')}>
+              <Button variant="ghost" onClick={() => setImportStep('mapping')}>
                 <X className="w-4 h-4 mr-2" />
-                返回
+                返回匹配
               </Button>
               <Button
                 onClick={handleConfirmImport}

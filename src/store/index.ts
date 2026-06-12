@@ -152,7 +152,9 @@ export const useAppStore = create<AppState>()(
         set({
           activities: state.activities.map((a) => (a.id === activityId ? { ...a, status: 'approved' } : a)),
           priceCheckRecords: state.priceCheckRecords.map((c) =>
-            c.activityId === activityId ? { ...c, auditStatus: 'approved', auditedAt: new Date().toISOString() } : c
+            c.activityId === activityId && c.auditStatus === 'pending'
+              ? { ...c, auditStatus: 'approved', auditedAt: new Date().toISOString() }
+              : c
           ),
         });
         if (activity) {
@@ -163,7 +165,7 @@ export const useAppStore = create<AppState>()(
       rejectActivity: (activityId, remark) => set((state) => ({
         activities: state.activities.map((a) => (a.id === activityId ? { ...a, status: 'rejected' } : a)),
         priceCheckRecords: state.priceCheckRecords.map((c) =>
-          c.activityId === activityId
+          c.activityId === activityId && c.auditStatus === 'pending'
             ? { ...c, auditStatus: 'rejected', auditRemark: remark, auditedAt: new Date().toISOString() }
             : c
         ),
@@ -337,6 +339,8 @@ export const useAppStore = create<AppState>()(
     {
       name: 'ecommerce-promotion-store',
       partialize: (state) => ({
+        shops: state.shops,
+        products: state.products,
         activities: state.activities,
         priceCheckRecords: state.priceCheckRecords,
         activityData: state.activityData,

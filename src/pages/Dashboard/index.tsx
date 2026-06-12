@@ -21,6 +21,8 @@ import {
   Check,
   X,
   Plus,
+  AlertTriangle,
+  Target,
 } from 'lucide-react';
 import {
   BarChart,
@@ -55,6 +57,7 @@ export default function Dashboard() {
   const {
     activities,
     products,
+    shops,
     activityData,
     getActivityById,
     getActivityDailyData,
@@ -77,6 +80,10 @@ export default function Dashboard() {
     gmv: 0,
   });
   const [showAddDataModal, setShowAddDataModal] = useState(false);
+  const [calendarPlatformFilter, setCalendarPlatformFilter] = useState<string>('');
+  const [calendarShopFilter, setCalendarShopFilter] = useState<string>('');
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date | null>(null);
+  const [showDayDetailModal, setShowDayDetailModal] = useState(false);
 
   const selectedActivity = selectedActivityId ? getActivityById(selectedActivityId) : null;
   const dailyData = selectedActivityId ? getActivityDailyData(selectedActivityId) : [];
@@ -87,6 +94,53 @@ export default function Dashboard() {
   }, [currentYear, currentMonth]);
 
   const allActivities = activities;
+
+  const filteredCalendarActivities = useMemo(() => {
+    return allActivities.filter((a) => {
+      if (calendarPlatformFilter && a.platform !== calendarPlatformFilter) return false;
+      if (calendarShopFilter) {
+        const shop = shops.find((s) => s.platform === a.platform);
+        if (!shop || shop.id !== calendarShopFilter) return false;
+      }
+      return a.status !== 'draft';
+    });
+  }, [allActivities, calendarPlatformFilter, calendarShopFilter, shops]);
+
+  const targetAchievement = useMemo(() => {
+    if (!selectedActivity || !summary) return null;
+    const gmvRate = selectedActivity.targetGmv ? (summary.totalGmv / selectedActivity.targetGmv) * 100 : null;
+    const ordersRate = selectedActivity.targetOrders ? (summary.totalOrders / selectedActivity.targetOrders) * 100 : null;
+    const profitMargin = summary.totalGmv > 0 ? (summary.totalProfit / summary.totalGmv) * 100 : 0;
+    const profitRate = selectedActivity.targetProfitMargin ? (profitMargin / selectedActivity.targetProfitMargin) * 100 : null;
+
+    const alerts: string[] = [];
+    if (gmvRate !== null && gmvRate < 50) alerts.push('成交额达成率低于 50%');
+    if (ordersRate !== null && ordersRate < 50) alerts.push('订单数达成率低于 50%');
+    if (profitRate !== null && profitRate < 60) alerts.push('毛利率低于目标 60%');
+
+    return {
+      gmvRate,
+      ordersRate,
+      profitRate,
+      profitMargin,
+      alerts,
+      hasTarget: !!(selectedActivity.targetGmv || selectedActivity.targetOrders || selectedActivity.targetProfitMargin),
+    };
+  }, [selectedActivity, summary]);
+
+  const dailyAlerts = useMemo(() => {
+    if (!selectedActivity || !selectedActivity.targetGmv) return new Map<string, boolean>();
+    const alertMap = new Map<string, boolean>();
+    const daysElapsed = dailyData.length;
+    if (daysElapsed === 0) return alertMap;
+    const expectedDailyGmv = selectedActivity.targetGmv / Math.max(daysElapsed, 1);
+    dailyData.forEach((d) => {
+      if (d.gmv < expectedDailyGmv * 0.5) {
+        alertMap.set(d.date, true);
+      }
+    });
+    return alertMap;
+  }, [selectedActivity, dailyData]);
 
   const chartData = useMemo(() => {
     return dailyData.map((d) => ({
@@ -306,6 +360,117 @@ export default function Dashboard() {
             />
           </div>
 
+          {targetAchievement?.hasTarget && (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <Target className="w-5 h-5 text-blue-600" />
+                  <CardTitle>目标达成率</CardTitle>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {targetAchievement.gmvRate !== null && (
+                    <div className="p-4 bg-slate-50 rounded-xl">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-slate-500">成交额达成率</span>
+                        <span className={cn(
+                          'text-sm font-medium',
+                          targetAchievement.gmvRate >= 80 ? 'text-emerald-600' :
+                          targetAchievement.gmvRate >= 50 ? 'text-amber-600' : 'text-red-600'
+                        )}>
+                          {targetAchievement.gmvRate.toFixed(1)}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-200 rounded-full h-2">
+                        <div
+                          className={cn(
+                            'h-2 rounded-full transition-all',
+                            targetAchievement.gmvRate >= 80 ? 'bg-emerald-500' :
+                            targetAchievement.gmvRate >= 50 ? 'bg-amber-500' : 'bg-red-500'
+                          )}
+                          style={{ width: `${Math.min(targetAchievement.gmvRate, 100)}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-slate-400 mt-2">
+                        目标 ¥{(selectedActivity!.targetGmv! / 10000).toFixed(1)}万
+                      </p>
+                    </div>
+                  )}
+                  {targetAchievement.ordersRate !== null && (
+                    <div className="p-4 bg-slate-50 rounded-xl">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-slate-500">订单数达成率</span>
+                        <span className={cn(
+                          'text-sm font-medium',
+                          targetAchievement.ordersRate >= 80 ? 'text-emerald-600' :
+                          targetAchievement.ordersRate >= 50 ? 'text-amber-600' : 'text-red-600'
+                        )}>
+                          {targetAchievement.ordersRate.toFixed(1)}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-200 rounded-full h-2">
+                        <div
+                          className={cn(
+                            'h-2 rounded-full transition-all',
+                            targetAchievement.ordersRate >= 80 ? 'bg-emerald-500' :
+                            targetAchievement.ordersRate >= 50 ? 'bg-amber-500' : 'bg-red-500'
+                          )}
+                          style={{ width: `${Math.min(targetAchievement.ordersRate, 100)}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-slate-400 mt-2">
+                        目标 {selectedActivity!.targetOrders!} 单
+                      </p>
+                    </div>
+                  )}
+                  {targetAchievement.profitRate !== null && (
+                    <div className="p-4 bg-slate-50 rounded-xl">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-slate-500">毛利率达成率</span>
+                        <span className={cn(
+                          'text-sm font-medium',
+                          targetAchievement.profitRate >= 80 ? 'text-emerald-600' :
+                          targetAchievement.profitRate >= 60 ? 'text-amber-600' : 'text-red-600'
+                        )}>
+                          {targetAchievement.profitRate.toFixed(1)}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-200 rounded-full h-2">
+                        <div
+                          className={cn(
+                            'h-2 rounded-full transition-all',
+                            targetAchievement.profitRate >= 80 ? 'bg-emerald-500' :
+                            targetAchievement.profitRate >= 60 ? 'bg-amber-500' : 'bg-red-500'
+                          )}
+                          style={{ width: `${Math.min(targetAchievement.profitRate, 100)}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-slate-400 mt-2">
+                        实际 {targetAchievement.profitMargin.toFixed(1)}% / 目标 {selectedActivity!.targetProfitMargin!}%
+                      </p>
+                    </div>
+                  )}
+                </div>
+                {targetAchievement.alerts.length > 0 && (
+                  <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl">
+                    <div className="flex items-start gap-3">
+                      <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-medium text-red-800">目标预警</p>
+                        <ul className="text-sm text-red-600 mt-1 space-y-0.5">
+                          {targetAchievement.alerts.map((alert, i) => (
+                            <li key={i}>· {alert}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <Card className="lg:col-span-2">
               <CardHeader>
@@ -366,6 +531,27 @@ export default function Dashboard() {
                       <ChevronRight className="w-5 h-5 text-slate-500" />
                     </button>
                   </div>
+                  <div className="grid grid-cols-2 gap-2 mb-4">
+                    <Select
+                      value={calendarPlatformFilter}
+                      onChange={(e) => setCalendarPlatformFilter(e.target.value)}
+                    >
+                      <option value="">全部平台</option>
+                      <option value="taobao">淘宝</option>
+                      <option value="jd">京东</option>
+                      <option value="pdd">拼多多</option>
+                      <option value="douyin">抖音</option>
+                    </Select>
+                    <Select
+                      value={calendarShopFilter}
+                      onChange={(e) => setCalendarShopFilter(e.target.value)}
+                    >
+                      <option value="">全部店铺</option>
+                      {shops.map((shop) => (
+                        <option key={shop.id} value={shop.id}>{shop.name}</option>
+                      ))}
+                    </Select>
+                  </div>
                   <div className="grid grid-cols-7 gap-1 text-center text-xs text-slate-500 mb-2">
                     {['日', '一', '二', '三', '四', '五', '六'].map((day) => (
                       <div key={day} className="py-1">{day}</div>
@@ -376,10 +562,12 @@ export default function Dashboard() {
                       <div key={`empty-${i}`} className="h-10" />
                     ))}
                     {calendarDays.map((date, index) => {
-                      const dayActivities = getActivitiesForDate(date, allActivities);
+                      const dayActivities = getActivitiesForDate(date, filteredCalendarActivities);
                       const hasActivity = dayActivities.length > 0;
                       const isTodayDate = isToday(date);
                       const inCurrentMonth = isCurrentMonth(date, currentYear, currentMonth);
+                      const dateStr = date.toISOString().slice(0, 10);
+                      const hasAlert = dailyAlerts.get(dateStr);
 
                       return (
                         <div
@@ -388,14 +576,24 @@ export default function Dashboard() {
                             'h-10 flex items-center justify-center text-sm rounded-lg relative cursor-pointer transition-all',
                             !inCurrentMonth && 'text-slate-300',
                             isTodayDate && 'bg-blue-600 text-white font-bold',
-                            hasActivity && !isTodayDate && 'bg-blue-100 text-blue-700 font-medium hover:bg-blue-200',
-                            !hasActivity && !isTodayDate && inCurrentMonth && 'hover:bg-slate-100'
+                            hasAlert && !isTodayDate && 'bg-red-100 text-red-700 font-medium hover:bg-red-200',
+                            hasActivity && !isTodayDate && !hasAlert && 'bg-blue-100 text-blue-700 font-medium hover:bg-blue-200',
+                            !hasActivity && !isTodayDate && !hasAlert && inCurrentMonth && 'hover:bg-slate-100'
                           )}
                           title={hasActivity ? dayActivities.map((a) => a.name).join(', ') : ''}
+                          onClick={() => {
+                            if (hasActivity) {
+                              setSelectedCalendarDate(date);
+                              setShowDayDetailModal(true);
+                            }
+                          }}
                         >
                           {date.getDate()}
                           {hasActivity && (
-                            <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-blue-600" />
+                            <div className={cn(
+                              'absolute bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full',
+                              hasAlert ? 'bg-red-500' : 'bg-blue-600'
+                            )} />
                           )}
                         </div>
                       );
@@ -405,7 +603,7 @@ export default function Dashboard() {
                 <div className="pt-4 border-t border-slate-100">
                   <p className="text-xs text-slate-500 mb-2">本月活动</p>
                   <div className="space-y-2 max-h-32 overflow-y-auto scrollbar-thin">
-                    {allActivities
+                    {filteredCalendarActivities
                       .filter((a) => {
                         const start = new Date(a.startTime);
                         const end = new Date(a.endTime);
@@ -414,7 +612,7 @@ export default function Dashboard() {
                           (end.getFullYear() === currentYear && end.getMonth() === currentMonth)
                         );
                       })
-                      .slice(0, 3)
+                      .slice(0, 5)
                       .map((activity) => (
                         <div
                           key={activity.id}
@@ -689,8 +887,18 @@ export default function Dashboard() {
                           </td>
                         </tr>
                       ) : (
-                        <tr key={row.id} className="hover:bg-slate-50 transition-colors">
-                          <td className="px-4 py-3 text-slate-800">{row.date}</td>
+                        <tr key={row.id} className={cn(
+                          'hover:bg-slate-50 transition-colors',
+                          dailyAlerts.get(row.date) && 'bg-red-50'
+                        )}>
+                          <td className="px-4 py-3 text-slate-800">
+                            <div className="flex items-center gap-1">
+                              {row.date}
+                              {dailyAlerts.get(row.date) && (
+                                <span title="成交额低于预期"><AlertTriangle className="w-3.5 h-3.5 text-red-500" /></span>
+                              )}
+                            </div>
+                          </td>
                           <td className="px-4 py-3 text-right text-slate-600">{row.visitors.toLocaleString()}</td>
                           <td className="px-4 py-3 text-right text-slate-600">{row.orders.toLocaleString()}</td>
                           <td className="px-4 py-3 text-right font-medium text-blue-600">{row.conversionRate.toFixed(2)}%</td>
@@ -914,6 +1122,76 @@ export default function Dashboard() {
             <Button onClick={handleAddNewData}>
               <Check className="w-4 h-4 mr-2" />
               保存数据
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showDayDetailModal}
+        onClose={() => setShowDayDetailModal(false)}
+        title={selectedCalendarDate ? `${selectedCalendarDate.getFullYear()}-${String(selectedCalendarDate.getMonth() + 1).padStart(2, '0')}-${String(selectedCalendarDate.getDate()).padStart(2, '0')} 活动排期` : '活动排期'}
+        description="当天进行中的活动列表"
+        size="md"
+      >
+        <div className="space-y-3">
+          {selectedCalendarDate && getActivitiesForDate(selectedCalendarDate, filteredCalendarActivities).length > 0 ? (
+            getActivitiesForDate(selectedCalendarDate, filteredCalendarActivities).map((activity) => {
+              const actDailyData = getActivityDailyData(activity.id);
+              const dayStr = selectedCalendarDate.toISOString().slice(0, 10);
+              const dayData = actDailyData.find((d) => d.date === dayStr);
+              return (
+                <div
+                  key={activity.id}
+                  className="p-4 border border-slate-200 rounded-xl hover:border-blue-300 cursor-pointer transition-all"
+                  onClick={() => {
+                    setSelectedActivityId(activity.id);
+                    setShowDayDetailModal(false);
+                  }}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-slate-800">{activity.name}</span>
+                      <Badge className={statusColors[activity.status]}>
+                        {statusLabels[activity.status]}
+                      </Badge>
+                    </div>
+                    <span className="text-xs text-slate-400">
+                      {platformLabels[activity.platform as keyof typeof platformLabels] || activity.platform}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-4 text-sm text-slate-600">
+                    <span>{formatDateRange(activity.startTime, activity.endTime)}</span>
+                    <span>{activity.productIds.length} 件商品</span>
+                  </div>
+                  {dayData && (
+                    <div className="grid grid-cols-3 gap-3 mt-3 pt-3 border-t border-slate-100">
+                      <div>
+                        <p className="text-xs text-slate-400">当日成交额</p>
+                        <p className="font-medium text-slate-800">{formatCurrency(dayData.gmv)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-slate-400">当日订单</p>
+                        <p className="font-medium text-slate-800">{dayData.orders}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-slate-400">转化率</p>
+                        <p className="font-medium text-slate-800">{dayData.conversionRate.toFixed(2)}%</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            <div className="py-8 text-center text-slate-500">
+              <Calendar className="w-10 h-10 mx-auto mb-3 text-slate-300" />
+              <p>当天没有进行中的活动</p>
+            </div>
+          )}
+          <div className="flex justify-end pt-2">
+            <Button variant="ghost" onClick={() => setShowDayDetailModal(false)}>
+              关闭
             </Button>
           </div>
         </div>

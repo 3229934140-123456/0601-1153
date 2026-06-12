@@ -43,6 +43,9 @@ export interface Activity {
   totalDiscount: number;
   createdAt: string;
   description?: string;
+  targetGmv?: number;
+  targetOrders?: number;
+  targetProfitMargin?: number;
 }
 
 export interface PriceCheckRecord {

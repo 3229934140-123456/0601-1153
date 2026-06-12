@@ -67,6 +67,9 @@ export default function ActivityConfig() {
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
   const [showValidation, setShowValidation] = useState(false);
+  const [targetGmv, setTargetGmv] = useState<number>(editingActivity?.targetGmv || 0);
+  const [targetOrders, setTargetOrders] = useState<number>(editingActivity?.targetOrders || 0);
+  const [targetProfitMargin, setTargetProfitMargin] = useState<number>(editingActivity?.targetProfitMargin || 0);
 
   const activityProducts = useMemo(() => {
     if (isEditing && editingActivity) {
@@ -157,6 +160,9 @@ export default function ActivityConfig() {
       productIds: isEditing && editingActivity ? editingActivity.productIds : selectedProductIds,
       promotionRules: rules,
       description,
+      targetGmv: targetGmv || undefined,
+      targetOrders: targetOrders || undefined,
+      targetProfitMargin: targetProfitMargin || undefined,
     };
 
     let targetActivityId: string;
@@ -481,6 +487,39 @@ export default function ActivityConfig() {
                 <span className={`font-medium ${riskyCount > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
                   {riskyCount > 0 ? '存在风险' : '暂无风险'}
                 </span>
+              </div>
+
+              <div className="pt-4 border-t border-slate-100">
+                <p className="text-sm font-medium text-slate-700 mb-3">活动目标（选填）</p>
+                <div className="space-y-3">
+                  <div>
+                    <Input
+                      type="number"
+                      label="成交额目标 (元)"
+                      placeholder="如 50000"
+                      value={targetGmv || ''}
+                      onChange={(e) => setTargetGmv(Number(e.target.value) || 0)}
+                    />
+                  </div>
+                  <div>
+                    <Input
+                      type="number"
+                      label="订单数目标"
+                      placeholder="如 500"
+                      value={targetOrders || ''}
+                      onChange={(e) => setTargetOrders(Number(e.target.value) || 0)}
+                    />
+                  </div>
+                  <div>
+                    <Input
+                      type="number"
+                      label="毛利率目标 (%)"
+                      placeholder="如 25"
+                      value={targetProfitMargin || ''}
+                      onChange={(e) => setTargetProfitMargin(Number(e.target.value) || 0)}
+                    />
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>

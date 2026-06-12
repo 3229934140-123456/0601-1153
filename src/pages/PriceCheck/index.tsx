@@ -61,6 +61,8 @@ export default function PriceCheck() {
   const [showApproveModal, setShowApproveModal] = useState(false);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+  const [singleAuditTarget, setSingleAuditTarget] = useState<{ id: string; status: 'approved' | 'rejected'; remark?: string } | null>(null);
+  const [singleAuditRemark, setSingleAuditRemark] = useState('');
   const [riskFilter, setRiskFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [isRunningCheck, setIsRunningCheck] = useState(false);
@@ -125,8 +127,16 @@ export default function PriceCheck() {
     exportSignupList(selectedActivity, products, checks);
   };
 
-  const handleUpdateSingleAudit = (checkId: string, status: PriceCheckRecord['auditStatus']) => {
-    updatePriceCheckAudit(checkId, status);
+  const handleUpdateSingleAudit = (checkId: string, status: 'approved' | 'rejected') => {
+    setSingleAuditTarget({ id: checkId, status });
+    setSingleAuditRemark('');
+  };
+
+  const handleConfirmSingleAudit = () => {
+    if (!singleAuditTarget) return;
+    updatePriceCheckAudit(singleAuditTarget.id, singleAuditTarget.status, singleAuditRemark || undefined);
+    setSingleAuditTarget(null);
+    setSingleAuditRemark('');
   };
 
   const canApprove = selectedActivityId ? canApproveActivity(selectedActivityId) : false;
@@ -339,6 +349,7 @@ export default function PriceCheck() {
                           <TableHead className="text-center">风险等级</TableHead>
                           <TableHead className="text-center">风险类型</TableHead>
                           <TableHead className="text-center">审核状态</TableHead>
+                          <TableHead className="text-center">备注</TableHead>
                           <TableHead className="text-center">操作</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -493,6 +504,60 @@ export default function PriceCheck() {
           </div>
         </div>
       </Modal>
+
+      <Modal
+        isOpen={!!singleAuditTarget}
+        onClose={() => setSingleAuditTarget(null)}
+        title={singleAuditTarget?.status === 'approved' ? '通过商品审核' : '驳回商品'}
+        description={singleAuditTarget?.status === 'approved' ? '确认通过该商品的价格校验' : '驳回该商品，请填写原因'}
+        size="sm"
+      >
+        <div className="space-y-4">
+          <div className="p-4 bg-slate-50 rounded-xl">
+            <p className="text-sm text-slate-500">
+              当前商品审核状态将变为：
+              <span className={cn(
+                'font-medium ml-1',
+                singleAuditTarget?.status === 'approved' ? 'text-emerald-600' : 'text-red-600'
+              )}>
+                {singleAuditTarget?.status === 'approved' ? '已通过' : '已驳回'}
+              </span>
+            </p>
+            {singleAuditTarget?.status === 'approved' && (
+              <p className="text-xs text-slate-400 mt-1">
+                如有风险但确认放行，请在备注中说明
+              </p>
+            )}
+          </div>
+          <TextArea
+            label={singleAuditTarget?.status === 'approved' ? '备注（选填，如备注放行原因）' : '驳回原因'}
+            placeholder={
+              singleAuditTarget?.status === 'approved'
+                ? '如：风险可控，备注放行'
+                : '请填写驳回原因'
+            }
+            rows={3}
+            value={singleAuditRemark}
+            onChange={(e) => setSingleAuditRemark(e.target.value)}
+          />
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={() => setSingleAuditTarget(null)}>
+              取消
+            </Button>
+            <Button
+              variant={singleAuditTarget?.status === 'approved' ? 'primary' : 'danger'}
+              onClick={handleConfirmSingleAudit}
+              disabled={singleAuditTarget?.status === 'rejected' && !singleAuditRemark.trim()}
+            >
+              {singleAuditTarget?.status === 'approved' ? (
+                <><CheckCircle2 className="w-4 h-4 mr-2" />确认通过</>
+              ) : (
+                <><XCircle className="w-4 h-4 mr-2" />确认驳回</>
+              )}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -559,6 +624,9 @@ function PriceCheckRow({ check, product, activityStatus, onApprove, onReject }: 
           <Badge className={auditStatusColors[check.auditStatus]}>
             {auditStatusLabels[check.auditStatus]}
           </Badge>
+        </TableCell>
+        <TableCell className="text-center text-xs text-slate-500 max-w-[120px] truncate" title={check.auditRemark}>
+          {check.auditRemark || '-'}
         </TableCell>
         <TableCell className="text-center">
           <div className="flex items-center justify-center gap-2">
