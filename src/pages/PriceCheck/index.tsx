@@ -1,0 +1,687 @@
+import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  ShieldCheck,
+  AlertTriangle,
+  CheckCircle2,
+  XCircle,
+  FileSpreadsheet,
+  Eye,
+  RefreshCw,
+  ChevronRight,
+  ArrowLeft,
+  Filter,
+  Search,
+  Download,
+  Clock,
+  Ban,
+} from 'lucide-react';
+import { useAppStore } from '@/store';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
+import { Input, Select, TextArea } from '@/components/ui/Input';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/Table';
+import { Badge } from '@/components/ui/Badge';
+import { Modal } from '@/components/ui/Modal';
+import { MetricCard } from '@/components/ui/MetricCard';
+import { formatCurrency } from '@/utils/price';
+import { formatDate, formatDateRange } from '@/utils/date';
+import { exportSignupList } from '@/utils/export';
+import { cn } from '@/lib/utils';
+import {
+  statusLabels,
+  statusColors,
+  riskLevelLabels,
+  riskLevelColors,
+  auditStatusLabels,
+  auditStatusColors,
+  platformLabels,
+} from '@/types';
+import type { Activity, PriceCheckRecord } from '@/types';
+
+export default function PriceCheck() {
+  const navigate = useNavigate();
+  const {
+    activities,
+    products,
+    priceCheckRecords,
+    runPriceCheck,
+    approveActivity,
+    rejectActivity,
+    updatePriceCheckAudit,
+    getActivityById,
+    getActivityProducts,
+    getActivityPriceChecks,
+  } = useAppStore();
+
+  const [selectedActivityId, setSelectedActivityId] = useState<string | null>(
+    activities.find((a) => a.status === 'pending')?.id || activities[0]?.id || null
+  );
+  const [showApproveModal, setShowApproveModal] = useState(false);
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [riskFilter, setRiskFilter] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isRunningCheck, setIsRunningCheck] = useState(false);
+
+  const selectedActivity = selectedActivityId ? getActivityById(selectedActivityId) : null;
+  const activityProducts = selectedActivityId ? getActivityProducts(selectedActivityId) : [];
+  const activityChecks = selectedActivityId ? getActivityPriceChecks(selectedActivityId) : [];
+
+  const pendingActivities = activities.filter((a) => a.status === 'pending' || a.status === 'draft');
+
+  const filteredChecks = useMemo(() => {
+    return activityChecks.filter((check) => {
+      if (riskFilter !== 'all' && check.riskLevel !== riskFilter) return false;
+      if (searchQuery) {
+        const product = products.find((p) => p.id === check.productId);
+        if (!product) return false;
+        return product.name.includes(searchQuery) || product.sku.includes(searchQuery);
+      }
+      return true;
+    });
+  }, [activityChecks, riskFilter, searchQuery, products]);
+
+  const stats = useMemo(() => {
+    const total = activityChecks.length;
+    const highRisk = activityChecks.filter((c) => c.riskLevel === 'high').length;
+    const mediumRisk = activityChecks.filter((c) => c.riskLevel === 'medium').length;
+    const lowRisk = activityChecks.filter((c) => c.riskLevel === 'low').length;
+    const belowCost = activityChecks.filter((c) => c.belowCost).length;
+    const couponRisk = activityChecks.filter((c) => c.couponRisk).length;
+    const approved = activityChecks.filter((c) => c.auditStatus === 'approved').length;
+    const rejected = activityChecks.filter((c) => c.auditStatus === 'rejected').length;
+    const pending = activityChecks.filter((c) => c.auditStatus === 'pending').length;
+
+    return { total, highRisk, mediumRisk, lowRisk, belowCost, couponRisk, approved, rejected, pending };
+  }, [activityChecks]);
+
+  const handleRunCheck = async () => {
+    if (!selectedActivityId) return;
+    setIsRunningCheck(true);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    runPriceCheck(selectedActivityId);
+    setIsRunningCheck(false);
+  };
+
+  const handleApprove = () => {
+    if (!selectedActivityId) return;
+    approveActivity(selectedActivityId);
+    setShowApproveModal(false);
+  };
+
+  const handleReject = () => {
+    if (!selectedActivityId || !rejectReason) return;
+    rejectActivity(selectedActivityId, rejectReason);
+    setShowRejectModal(false);
+    setRejectReason('');
+  };
+
+  const handleExportSignupList = () => {
+    if (!selectedActivity || !selectedActivityId) return;
+    const checks = getActivityPriceChecks(selectedActivityId);
+    exportSignupList(selectedActivity, products, checks);
+  };
+
+  const handleUpdateSingleAudit = (checkId: string, status: PriceCheckRecord['auditStatus']) => {
+    updatePriceCheckAudit(checkId, status);
+  };
+
+  const canApprove = stats.highRisk === 0 && stats.pending === stats.total;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" onClick={() => navigate('/activities')}>
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            返回活动配置
+          </Button>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-800">价格校验</h1>
+            <p className="text-slate-500 mt-1">检查活动价格风险，审核通过后生成报名清单</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <MetricCard
+          title="待审核商品"
+          value={stats.total}
+          suffix="件"
+          icon={<ShieldCheck className="w-5 h-5" />}
+          color="blue"
+        />
+        <MetricCard
+          title="高风险商品"
+          value={stats.highRisk}
+          suffix="件"
+          change={stats.total > 0 ? -(stats.highRisk / stats.total) * 100 : 0}
+          icon={<AlertTriangle className="w-5 h-5" />}
+          color="red"
+        />
+        <MetricCard
+          title="低于成本价"
+          value={stats.belowCost}
+          suffix="件"
+          icon={<XCircle className="w-5 h-5" />}
+          color="amber"
+        />
+        <MetricCard
+          title="叠券风险"
+          value={stats.couponRisk}
+          suffix="件"
+          icon={<Ban className="w-5 h-5" />}
+          color="purple"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        <Card className="lg:col-span-1">
+          <CardHeader>
+            <CardTitle>活动列表</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="space-y-1">
+              {pendingActivities.length === 0 ? (
+                <div className="p-8 text-center text-slate-500">
+                  <Clock className="w-8 h-8 mx-auto mb-2 text-slate-300" />
+                  <p className="text-sm">暂无待审核活动</p>
+                </div>
+              ) : (
+                pendingActivities.map((activity) => (
+                  <button
+                    key={activity.id}
+                    onClick={() => setSelectedActivityId(activity.id)}
+                    className={cn(
+                      'w-full p-4 text-left transition-all duration-200 border-l-4',
+                      selectedActivityId === activity.id
+                        ? 'bg-blue-50 border-blue-600'
+                        : 'hover:bg-slate-50 border-transparent'
+                    )}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-slate-800 truncate">{activity.name}</p>
+                        <p className="text-xs text-slate-500 mt-1">
+                          {formatDateRange(activity.startTime, activity.endTime)}
+                        </p>
+                        <div className="flex items-center gap-2 mt-2">
+                          <Badge className={statusColors[activity.status]}>
+                            {statusLabels[activity.status]}
+                          </Badge>
+                          <span className="text-xs text-slate-400">
+                            {activity.productIds.length} 件商品
+                          </span>
+                        </div>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-slate-400 flex-shrink-0 ml-2" />
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="lg:col-span-3 space-y-6">
+          {selectedActivity ? (
+            <>
+              <Card>
+                <CardHeader>
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div>
+                      <div className="flex items-center gap-3">
+                        <CardTitle>{selectedActivity.name}</CardTitle>
+                        <Badge className={statusColors[selectedActivity.status]}>
+                          {statusLabels[selectedActivity.status]}
+                        </Badge>
+                      </div>
+                      <p className="text-sm text-slate-500 mt-1">
+                        {platformLabels[selectedActivity.platform as keyof typeof platformLabels] || selectedActivity.platform} · 
+                        {formatDateRange(selectedActivity.startTime, selectedActivity.endTime)} ·
+                        {activityProducts.length} 件商品
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Button
+                        variant="secondary"
+                        onClick={handleRunCheck}
+                        disabled={isRunningCheck}
+                      >
+                        <RefreshCw className={cn('w-4 h-4 mr-2', isRunningCheck && 'animate-spin')} />
+                        {isRunningCheck ? '检测中...' : '重新检测'}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => handleExportSignupList()}
+                        disabled={selectedActivity.status !== 'approved'}
+                      >
+                        <FileSpreadsheet className="w-4 h-4 mr-2" />
+                        导出清单
+                      </Button>
+                      {selectedActivity.status === 'pending' && (
+                        <>
+                          <Button
+                            variant="secondary"
+                            onClick={() => setShowRejectModal(true)}
+                          >
+                            <XCircle className="w-4 h-4 mr-2" />
+                            驳回
+                          </Button>
+                          <Button
+                            onClick={() => setShowApproveModal(true)}
+                            disabled={!canApprove}
+                          >
+                            <CheckCircle2 className="w-4 h-4 mr-2" />
+                            通过审核
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-3 gap-4 mb-6">
+                    <div className="p-4 bg-slate-50 rounded-xl">
+                      <p className="text-sm text-slate-500">已通过</p>
+                      <p className="text-2xl font-bold text-emerald-600 mt-1">{stats.approved}</p>
+                    </div>
+                    <div className="p-4 bg-slate-50 rounded-xl">
+                      <p className="text-sm text-slate-500">待审核</p>
+                      <p className="text-2xl font-bold text-amber-600 mt-1">{stats.pending}</p>
+                    </div>
+                    <div className="p-4 bg-slate-50 rounded-xl">
+                      <p className="text-sm text-slate-500">已驳回</p>
+                      <p className="text-2xl font-bold text-red-600 mt-1">{stats.rejected}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-4 mb-4">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <Input
+                        placeholder="搜索商品名称或 SKU"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="pl-10"
+                      />
+                    </div>
+                    <Select
+                      value={riskFilter}
+                      onChange={(e) => setRiskFilter(e.target.value)}
+                      className="w-full sm:w-40"
+                    >
+                      <option value="all">全部风险</option>
+                      <option value="high">高风险</option>
+                      <option value="medium">中风险</option>
+                      <option value="low">低风险</option>
+                    </Select>
+                  </div>
+
+                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>商品信息</TableHead>
+                          <TableHead className="text-right">原价</TableHead>
+                          <TableHead className="text-right">活动价</TableHead>
+                          <TableHead className="text-right">到手价</TableHead>
+                          <TableHead className="text-center">风险等级</TableHead>
+                          <TableHead className="text-center">风险类型</TableHead>
+                          <TableHead className="text-center">审核状态</TableHead>
+                          <TableHead className="text-center">操作</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredChecks.map((check) => {
+                          const product = products.find((p) => p.id === check.productId);
+                          if (!product) return null;
+
+                          return (
+                            <PriceCheckRow
+                              key={check.id}
+                              check={check}
+                              product={product}
+                              activityStatus={selectedActivity.status}
+                              onApprove={() => handleUpdateSingleAudit(check.id, 'approved')}
+                              onReject={() => handleUpdateSingleAudit(check.id, 'rejected')}
+                            />
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                    {filteredChecks.length === 0 && (
+                      <div className="py-16 text-center text-slate-500">
+                        <ShieldCheck className="w-12 h-12 mx-auto mb-4 text-slate-300" />
+                        <p>没有找到符合条件的校验记录</p>
+                        <p className="text-sm mt-1">请先运行价格检测或调整筛选条件</p>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {activityChecks.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>风险说明</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
+                        <div className="flex items-center gap-2 mb-2">
+                          <AlertTriangle className="w-5 h-5 text-red-500" />
+                          <span className="font-medium text-red-800">高风险</span>
+                        </div>
+                        <p className="text-sm text-red-600">
+                          到手价低于成本价，或亏损比例超过 25%，建议调整促销规则或移除商品
+                        </p>
+                      </div>
+                      <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                        <div className="flex items-center gap-2 mb-2">
+                          <AlertTriangle className="w-5 h-5 text-amber-500" />
+                          <span className="font-medium text-amber-800">中风险</span>
+                        </div>
+                        <p className="text-sm text-amber-600">
+                          活动价低于成本价，或毛利低于 15%，叠加优惠券后可能亏损
+                        </p>
+                      </div>
+                      <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+                        <div className="flex items-center gap-2 mb-2">
+                          <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                          <span className="font-medium text-emerald-800">低风险</span>
+                        </div>
+                        <p className="text-sm text-emerald-600">
+                          价格在合理范围内，毛利充足，可正常参与活动
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </>
+          ) : (
+            <Card className="py-16">
+              <div className="text-center text-slate-500">
+                <ShieldCheck className="w-16 h-16 mx-auto mb-4 text-slate-300" />
+                <p className="text-lg font-medium">请选择一个活动进行价格校验</p>
+                <p className="text-sm mt-1">从左侧活动列表中选择待审核的活动</p>
+              </div>
+            </Card>
+          )}
+        </div>
+      </div>
+
+      <Modal
+        isOpen={showApproveModal}
+        onClose={() => setShowApproveModal(false)}
+        title="通过审核"
+        description="确认通过该活动的价格校验，审核通过后可导出报名清单"
+        size="sm"
+      >
+        <div className="space-y-4">
+          {!canApprove && (
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium text-amber-800">存在未处理的风险商品</p>
+                  <p className="text-sm text-amber-600 mt-1">
+                    仍有 {stats.highRisk} 件高风险商品和 {stats.pending} 件待审核商品，
+                    建议先处理所有风险后再审核通过
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+          <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
+            <p className="font-medium text-blue-800">{selectedActivity?.name}</p>
+            <p className="text-sm text-blue-600 mt-1">
+              共 {stats.total} 件商品，{stats.approved} 件已通过，{stats.pending} 件待审核
+            </p>
+          </div>
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={() => setShowApproveModal(false)}>
+              取消
+            </Button>
+            <Button onClick={handleApprove}>
+              <CheckCircle2 className="w-4 h-4 mr-2" />
+              确认通过
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showRejectModal}
+        onClose={() => setShowRejectModal(false)}
+        title="驳回活动"
+        description="请填写驳回原因，以便运营人员调整活动配置"
+        size="md"
+      >
+        <div className="space-y-4">
+          <TextArea
+            label="驳回原因"
+            placeholder="请详细说明驳回原因，如：部分商品价格低于成本价、促销规则需要调整等"
+            rows={4}
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+          />
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={() => setShowRejectModal(false)}>
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              onClick={handleReject}
+              disabled={!rejectReason.trim()}
+            >
+              <XCircle className="w-4 h-4 mr-2" />
+              确认驳回
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+interface PriceCheckRowProps {
+  check: PriceCheckRecord;
+  product: any;
+  activityStatus: Activity['status'];
+  onApprove: () => void;
+  onReject: () => void;
+}
+
+function PriceCheckRow({ check, product, activityStatus, onApprove, onReject }: PriceCheckRowProps) {
+  const [showDetail, setShowDetail] = useState(false);
+
+  const riskTypes = [];
+  if (check.belowCost) riskTypes.push('低于成本');
+  if (check.couponRisk) riskTypes.push('叠券风险');
+  if (riskTypes.length === 0) riskTypes.push('正常');
+
+  return (
+    <>
+      <TableRow className={cn(check.riskLevel === 'high' && 'bg-red-50/30')}>
+        <TableCell>
+          <div className="flex items-center gap-3">
+            <img
+              src={product.image}
+              alt={product.name}
+              className="w-10 h-10 rounded-lg object-cover bg-slate-100"
+            />
+            <div>
+              <p className="font-medium text-slate-800">{product.name}</p>
+              <p className="text-xs text-slate-500">{product.sku}</p>
+            </div>
+          </div>
+        </TableCell>
+        <TableCell className="text-right text-slate-600">
+          {formatCurrency(check.originalPrice)}
+        </TableCell>
+        <TableCell className="text-right font-medium text-blue-600">
+          {formatCurrency(check.activityPrice)}
+        </TableCell>
+        <TableCell className="text-right font-bold text-amber-600">
+          {formatCurrency(check.finalPrice)}
+        </TableCell>
+        <TableCell className="text-center">
+          <Badge className={riskLevelColors[check.riskLevel]}>
+            {riskLevelLabels[check.riskLevel]}
+          </Badge>
+        </TableCell>
+        <TableCell className="text-center">
+          {riskTypes.map((type, i) => (
+            <Badge
+              key={i}
+              variant={type === '正常' ? 'success' : type === '低于成本' ? 'danger' : 'warning'}
+              className={i > 0 ? 'ml-1' : ''}
+            >
+              {type}
+            </Badge>
+          ))}
+        </TableCell>
+        <TableCell className="text-center">
+          <Badge className={auditStatusColors[check.auditStatus]}>
+            {auditStatusLabels[check.auditStatus]}
+          </Badge>
+        </TableCell>
+        <TableCell className="text-center">
+          <div className="flex items-center justify-center gap-2">
+            <button
+              onClick={() => setShowDetail(true)}
+              className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors"
+              title="查看详情"
+            >
+              <Eye className="w-4 h-4 text-slate-500" />
+            </button>
+            {activityStatus === 'pending' && check.auditStatus === 'pending' && (
+              <>
+                <button
+                  onClick={onApprove}
+                  className="p-1.5 hover:bg-emerald-50 rounded-lg transition-colors"
+                  title="通过"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                </button>
+                <button
+                  onClick={onReject}
+                  className="p-1.5 hover:bg-red-50 rounded-lg transition-colors"
+                  title="驳回"
+                >
+                  <XCircle className="w-4 h-4 text-red-500" />
+                </button>
+              </>
+            )}
+          </div>
+        </TableCell>
+      </TableRow>
+
+      <Modal
+        isOpen={showDetail}
+        onClose={() => setShowDetail(false)}
+        title="商品价格详情"
+        size="md"
+      >
+        <div className="space-y-6">
+          <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-xl">
+            <img
+              src={product.image}
+              alt={product.name}
+              className="w-20 h-20 rounded-xl object-cover bg-white"
+            />
+            <div>
+              <p className="font-medium text-slate-800 text-lg">{product.name}</p>
+              <p className="text-sm text-slate-500">{product.sku} · {product.category}</p>
+              <div className="flex items-center gap-2 mt-2">
+                <Badge className={riskLevelColors[check.riskLevel]}>
+                  {riskLevelLabels[check.riskLevel]}
+                </Badge>
+                <Badge className={auditStatusColors[check.auditStatus]}>
+                  {auditStatusLabels[check.auditStatus]}
+                </Badge>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="p-4 border border-slate-200 rounded-xl">
+              <p className="text-sm text-slate-500">成本价</p>
+              <p className="text-xl font-bold text-slate-800 mt-1">
+                {formatCurrency(product.costPrice)}
+              </p>
+            </div>
+            <div className="p-4 border border-slate-200 rounded-xl">
+              <p className="text-sm text-slate-500">原价</p>
+              <p className="text-xl font-bold text-slate-800 mt-1">
+                {formatCurrency(check.originalPrice)}
+              </p>
+            </div>
+            <div className="p-4 border border-blue-200 bg-blue-50 rounded-xl">
+              <p className="text-sm text-blue-600">活动价</p>
+              <p className="text-xl font-bold text-blue-600 mt-1">
+                {formatCurrency(check.activityPrice)}
+              </p>
+              <p className="text-xs text-blue-500 mt-1">
+                优惠 {formatCurrency(check.originalPrice - check.activityPrice)}
+              </p>
+            </div>
+            <div className="p-4 border border-amber-200 bg-amber-50 rounded-xl">
+              <p className="text-sm text-amber-600">预计到手价</p>
+              <p className="text-xl font-bold text-amber-600 mt-1">
+                {formatCurrency(check.finalPrice)}
+              </p>
+              <p className="text-xs text-amber-500 mt-1">
+                含店铺券 ¥20
+              </p>
+            </div>
+          </div>
+
+          <div className="p-4 bg-slate-50 rounded-xl">
+            <p className="text-sm font-medium text-slate-700 mb-3">利润分析</p>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-600">预估利润</span>
+              <span className={cn(
+                'font-bold',
+                check.finalPrice - product.costPrice >= 0 ? 'text-emerald-600' : 'text-red-600'
+              )}>
+                {formatCurrency(check.finalPrice - product.costPrice)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between mt-2">
+              <span className="text-slate-600">毛利率</span>
+              <span className={cn(
+                'font-medium',
+                ((check.finalPrice - product.costPrice) / check.finalPrice) * 100 >= 20 ? 'text-emerald-600' : 'text-red-600'
+              )}>
+                {(((check.finalPrice - product.costPrice) / check.finalPrice) * 100).toFixed(1)}%
+              </span>
+            </div>
+          </div>
+
+          {check.riskLevel !== 'low' && (
+            <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium text-red-800">风险提示</p>
+                  <p className="text-sm text-red-600 mt-1">
+                    {check.belowCost && '到手价低于成本价，将造成亏损。'}
+                    {check.couponRisk && '叠加店铺优惠券后，价格可能低于成本价。'}
+                    {check.riskValue > 0 && `风险值：${check.riskValue}%`}
+                  </p>
+                  <p className="text-sm text-red-600 mt-2">
+                    建议：调整促销规则、提高活动价格或移除该商品
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+    </>
+  );
+}
