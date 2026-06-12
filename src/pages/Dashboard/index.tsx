@@ -17,6 +17,10 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Minus,
+  Edit3,
+  Check,
+  X,
+  Plus,
 } from 'lucide-react';
 import {
   BarChart,
@@ -36,7 +40,7 @@ import {
 import { useAppStore } from '@/store';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { Select } from '@/components/ui/Input';
+import { Select, Input } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { MetricCard } from '@/components/ui/MetricCard';
 import { Modal } from '@/components/ui/Modal';
@@ -55,6 +59,7 @@ export default function Dashboard() {
     getActivityById,
     getActivityDailyData,
     getActivitySummary,
+    addOrUpdateActivityDailyData,
   } = useAppStore();
 
   const [selectedActivityId, setSelectedActivityId] = useState<string | null>(
@@ -64,6 +69,14 @@ export default function Dashboard() {
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
   const [showActivityDetail, setShowActivityDetail] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  const [editingDateId, setEditingDateId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({
+    date: '',
+    visitors: 0,
+    orders: 0,
+    gmv: 0,
+  });
+  const [showAddDataModal, setShowAddDataModal] = useState(false);
 
   const selectedActivity = selectedActivityId ? getActivityById(selectedActivityId) : null;
   const dailyData = selectedActivityId ? getActivityDailyData(selectedActivityId) : [];
@@ -147,6 +160,79 @@ export default function Dashboard() {
     } else {
       setCurrentMonth(currentMonth + 1);
     }
+  };
+
+  const handleStartEdit = (row: any) => {
+    setEditingDateId(row.id);
+    setEditForm({
+      date: row.date,
+      visitors: row.visitors,
+      orders: row.orders,
+      gmv: row.gmv,
+    });
+  };
+
+  const handleCancelEdit = () => {
+    setEditingDateId(null);
+  };
+
+  const handleSaveEdit = () => {
+    if (!selectedActivityId || !editingDateId) return;
+    const visitors = Number(editForm.visitors) || 0;
+    const orders = Math.max(0, Math.min(Number(editForm.orders) || 0, visitors));
+    const gmv = Number(editForm.gmv) || 0;
+    const conversionRate = visitors > 0 ? (orders / visitors) * 100 : 0;
+    const avgOrderValue = orders > 0 ? gmv / orders : 0;
+    const avgCost = 60;
+    const profit = orders > 0 ? Math.round(orders * (avgOrderValue - avgCost)) : 0;
+    const unitsSold = Math.round(orders * 1.2);
+
+    addOrUpdateActivityDailyData(selectedActivityId, {
+      date: editForm.date,
+      visitors,
+      orders,
+      conversionRate,
+      gmv,
+      profit,
+      unitsSold,
+    });
+    setEditingDateId(null);
+  };
+
+  const handleOpenAddModal = () => {
+    const defaultDate = dailyData.length > 0
+      ? dailyData[dailyData.length - 1].date
+      : new Date().toISOString().slice(0, 10);
+    setEditForm({
+      date: defaultDate,
+      visitors: 0,
+      orders: 0,
+      gmv: 0,
+    });
+    setShowAddDataModal(true);
+  };
+
+  const handleAddNewData = () => {
+    if (!selectedActivityId) return;
+    const visitors = Number(editForm.visitors) || 0;
+    const orders = Math.max(0, Math.min(Number(editForm.orders) || 0, visitors));
+    const gmv = Number(editForm.gmv) || 0;
+    const conversionRate = visitors > 0 ? (orders / visitors) * 100 : 0;
+    const avgOrderValue = orders > 0 ? gmv / orders : 0;
+    const avgCost = 60;
+    const profit = orders > 0 ? Math.round(orders * (avgOrderValue - avgCost)) : 0;
+    const unitsSold = Math.round(orders * 1.2);
+
+    addOrUpdateActivityDailyData(selectedActivityId, {
+      date: editForm.date,
+      visitors,
+      orders,
+      conversionRate,
+      gmv,
+      profit,
+      unitsSold,
+    });
+    setShowAddDataModal(false);
   };
 
   return (
@@ -509,7 +595,15 @@ export default function Dashboard() {
 
           <Card>
             <CardHeader>
-              <CardTitle>每日明细</CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle>每日明细</CardTitle>
+                {selectedActivity && selectedActivity.status !== 'draft' && (
+                  <Button size="sm" onClick={handleOpenAddModal}>
+                    <Plus className="w-4 h-4 mr-2" />
+                    补录数据
+                  </Button>
+                )}
+              </div>
             </CardHeader>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
@@ -524,29 +618,106 @@ export default function Dashboard() {
                       <th className="px-4 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">利润</th>
                       <th className="px-4 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">销售件数</th>
                       <th className="px-4 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">客单价</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">操作</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
                     {dailyData.map((row) => (
-                      <tr key={row.id} className="hover:bg-slate-50 transition-colors">
-                        <td className="px-4 py-3 text-slate-800">{row.date}</td>
-                        <td className="px-4 py-3 text-right text-slate-600">{row.visitors.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-right text-slate-600">{row.orders.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-right font-medium text-blue-600">{row.conversionRate.toFixed(2)}%</td>
-                        <td className="px-4 py-3 text-right font-medium text-slate-800">{formatCurrency(row.gmv)}</td>
-                        <td className={cn('px-4 py-3 text-right font-medium', row.profit >= 0 ? 'text-emerald-600' : 'text-red-600')}>
-                          {formatCurrency(row.profit)}
-                        </td>
-                        <td className="px-4 py-3 text-right text-slate-600">{row.unitsSold.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-right text-slate-600">
-                          {row.orders > 0 ? formatCurrency(row.gmv / row.orders) : '-'}
-                        </td>
-                      </tr>
+                      editingDateId === row.id ? (
+                        <tr key={row.id} className="bg-blue-50">
+                          <td className="px-4 py-3">
+                            <Input
+                              type="date"
+                              value={editForm.date}
+                              onChange={(e) => setEditForm({ ...editForm, date: e.target.value })}
+                              className="w-36"
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <Input
+                              type="number"
+                              value={editForm.visitors}
+                              onChange={(e) => setEditForm({ ...editForm, visitors: Number(e.target.value) })}
+                              className="w-24 text-right ml-auto"
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <Input
+                              type="number"
+                              value={editForm.orders}
+                              onChange={(e) => setEditForm({ ...editForm, orders: Number(e.target.value) })}
+                              className="w-24 text-right ml-auto"
+                            />
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-500">
+                            {editForm.visitors > 0 ? ((editForm.orders / editForm.visitors) * 100).toFixed(2) : '0.00'}%
+                          </td>
+                          <td className="px-4 py-3">
+                            <Input
+                              type="number"
+                              value={editForm.gmv}
+                              onChange={(e) => setEditForm({ ...editForm, gmv: Number(e.target.value) })}
+                              className="w-28 text-right ml-auto"
+                            />
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-500">
+                            自动计算
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-500">
+                            自动计算
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-500">
+                            {editForm.orders > 0 ? formatCurrency(editForm.gmv / editForm.orders) : '-'}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                onClick={handleSaveEdit}
+                                className="p-1.5 hover:bg-emerald-100 rounded-lg transition-colors"
+                                title="保存"
+                              >
+                                <Check className="w-4 h-4 text-emerald-600" />
+                              </button>
+                              <button
+                                onClick={handleCancelEdit}
+                                className="p-1.5 hover:bg-red-100 rounded-lg transition-colors"
+                                title="取消"
+                              >
+                                <X className="w-4 h-4 text-red-600" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : (
+                        <tr key={row.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="px-4 py-3 text-slate-800">{row.date}</td>
+                          <td className="px-4 py-3 text-right text-slate-600">{row.visitors.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right text-slate-600">{row.orders.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right font-medium text-blue-600">{row.conversionRate.toFixed(2)}%</td>
+                          <td className="px-4 py-3 text-right font-medium text-slate-800">{formatCurrency(row.gmv)}</td>
+                          <td className={cn('px-4 py-3 text-right font-medium', row.profit >= 0 ? 'text-emerald-600' : 'text-red-600')}>
+                            {formatCurrency(row.profit)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-600">{row.unitsSold.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right text-slate-600">
+                            {row.orders > 0 ? formatCurrency(row.gmv / row.orders) : '-'}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <button
+                              onClick={() => handleStartEdit(row)}
+                              className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors inline-flex"
+                              title="编辑"
+                            >
+                              <Edit3 className="w-4 h-4 text-slate-500" />
+                            </button>
+                          </td>
+                        </tr>
+                      )
                     ))}
                     {dailyData.length === 0 && (
                       <tr>
-                        <td colSpan={8} className="px-4 py-16 text-center text-slate-500">
-                          暂无数据
+                        <td colSpan={9} className="px-4 py-16 text-center text-slate-500">
+                          暂无数据，点击右上角「补录数据」添加
                         </td>
                       </tr>
                     )}
@@ -674,6 +845,75 @@ export default function Dashboard() {
             <Button onClick={handleExport}>
               <Download className="w-4 h-4 mr-2" />
               确认导出
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showAddDataModal}
+        onClose={() => setShowAddDataModal(false)}
+        title="补录每日数据"
+        description="添加或修改活动的每日运营数据"
+        size="md"
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">日期</label>
+              <Input
+                type="date"
+                value={editForm.date}
+                onChange={(e) => setEditForm({ ...editForm, date: e.target.value })}
+              />
+            </div>
+            <div />
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">访客数 (人)</label>
+              <Input
+                type="number"
+                placeholder="请输入访客数"
+                value={editForm.visitors}
+                onChange={(e) => setEditForm({ ...editForm, visitors: Number(e.target.value) })}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">订单数 (单)</label>
+              <Input
+                type="number"
+                placeholder="请输入订单数"
+                value={editForm.orders}
+                onChange={(e) => setEditForm({ ...editForm, orders: Number(e.target.value) })}
+              />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">成交额 (元)</label>
+              <Input
+                type="number"
+                placeholder="请输入成交额"
+                value={editForm.gmv}
+                onChange={(e) => setEditForm({ ...editForm, gmv: Number(e.target.value) })}
+              />
+            </div>
+          </div>
+
+          <div className="p-4 bg-slate-50 rounded-xl">
+            <p className="text-sm text-slate-600">
+              <span className="font-medium">自动计算项：</span>
+              转化率 {editForm.visitors > 0 ? ((editForm.orders / editForm.visitors) * 100).toFixed(2) : '0.00'}%，
+              客单价 {editForm.orders > 0 ? formatCurrency(editForm.gmv / editForm.orders) : '-'}，
+              利润和销售件数将根据公式自动推算
+            </p>
+          </div>
+
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => setShowAddDataModal(false)}>
+              <X className="w-4 h-4 mr-2" />
+              取消
+            </Button>
+            <Button onClick={handleAddNewData}>
+              <Check className="w-4 h-4 mr-2" />
+              保存数据
             </Button>
           </div>
         </div>

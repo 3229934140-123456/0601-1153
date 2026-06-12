@@ -49,6 +49,7 @@ export default function PriceCheck() {
     approveActivity,
     rejectActivity,
     updatePriceCheckAudit,
+    canApproveActivity,
     getActivityById,
     getActivityProducts,
     getActivityPriceChecks,
@@ -89,11 +90,12 @@ export default function PriceCheck() {
     const lowRisk = activityChecks.filter((c) => c.riskLevel === 'low').length;
     const belowCost = activityChecks.filter((c) => c.belowCost).length;
     const couponRisk = activityChecks.filter((c) => c.couponRisk).length;
+    const nearCostRisk = activityChecks.filter((c) => c.nearCostRisk).length;
     const approved = activityChecks.filter((c) => c.auditStatus === 'approved').length;
     const rejected = activityChecks.filter((c) => c.auditStatus === 'rejected').length;
     const pending = activityChecks.filter((c) => c.auditStatus === 'pending').length;
 
-    return { total, highRisk, mediumRisk, lowRisk, belowCost, couponRisk, approved, rejected, pending };
+    return { total, highRisk, mediumRisk, lowRisk, belowCost, couponRisk, nearCostRisk, approved, rejected, pending };
   }, [activityChecks]);
 
   const handleRunCheck = async () => {
@@ -127,7 +129,7 @@ export default function PriceCheck() {
     updatePriceCheckAudit(checkId, status);
   };
 
-  const canApprove = stats.highRisk === 0 && stats.pending === stats.total;
+  const canApprove = selectedActivityId ? canApproveActivity(selectedActivityId) : false;
 
   return (
     <div className="space-y-6">
@@ -144,7 +146,7 @@ export default function PriceCheck() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <MetricCard
           title="待审核商品"
           value={stats.total}
@@ -173,6 +175,13 @@ export default function PriceCheck() {
           suffix="件"
           icon={<Ban className="w-5 h-5" />}
           color="purple"
+        />
+        <MetricCard
+          title="近成本线"
+          value={stats.nearCostRisk}
+          suffix="件"
+          icon={<AlertTriangle className="w-5 h-5" />}
+          color="amber"
         />
       </div>
 
@@ -384,7 +393,7 @@ export default function PriceCheck() {
                           <span className="font-medium text-amber-800">中风险</span>
                         </div>
                         <p className="text-sm text-amber-600">
-                          活动价低于成本价，或毛利低于 15%，叠加优惠券后可能亏损
+                          活动价低于成本、叠加优惠券存在亏损风险，或毛利率低于 10% 接近成本线，需谨慎处理
                         </p>
                       </div>
                       <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
@@ -428,8 +437,9 @@ export default function PriceCheck() {
                 <div>
                   <p className="font-medium text-amber-800">存在未处理的风险商品</p>
                   <p className="text-sm text-amber-600 mt-1">
-                    仍有 {stats.highRisk} 件高风险商品和 {stats.pending} 件待审核商品，
-                    建议先处理所有风险后再审核通过
+                    {stats.pending > 0 && `仍有 ${stats.pending} 件待审核商品，`}
+                    {stats.highRisk > 0 && `${stats.highRisk} 件高风险商品未驳回，`}
+                    建议先处理所有商品后再审核通过
                   </p>
                 </div>
               </div>
@@ -501,6 +511,7 @@ function PriceCheckRow({ check, product, activityStatus, onApprove, onReject }: 
   const riskTypes = [];
   if (check.belowCost) riskTypes.push('低于成本');
   if (check.couponRisk) riskTypes.push('叠券风险');
+  if (check.nearCostRisk) riskTypes.push('近成本线');
   if (riskTypes.length === 0) riskTypes.push('正常');
 
   return (
@@ -635,7 +646,10 @@ function PriceCheckRow({ check, product, activityStatus, onApprove, onReject }: 
                 {formatCurrency(check.finalPrice)}
               </p>
               <p className="text-xs text-amber-500 mt-1">
-                含店铺券 ¥20
+                {check.shopCouponAmount > 0 && `含店铺券 ¥${check.shopCouponAmount}`}
+                {check.shopCouponAmount > 0 && check.platformCouponAmount > 0 && ' + '}
+                {check.platformCouponAmount > 0 && `平台券 ¥${check.platformCouponAmount}`}
+                {check.shopCouponAmount === 0 && check.platformCouponAmount === 0 && '暂无优惠券'}
               </p>
             </div>
           </div>
@@ -663,18 +677,46 @@ function PriceCheckRow({ check, product, activityStatus, onApprove, onReject }: 
           </div>
 
           {check.riskLevel !== 'low' && (
-            <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
+            <div className={cn(
+              'p-4 border rounded-xl',
+              check.riskLevel === 'high' ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'
+            )}>
               <div className="flex items-start gap-3">
-                <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                <AlertTriangle className={cn(
+                  'w-5 h-5 flex-shrink-0 mt-0.5',
+                  check.riskLevel === 'high' ? 'text-red-500' : 'text-amber-500'
+                )} />
                 <div>
-                  <p className="font-medium text-red-800">风险提示</p>
-                  <p className="text-sm text-red-600 mt-1">
-                    {check.belowCost && '到手价低于成本价，将造成亏损。'}
-                    {check.couponRisk && '叠加店铺优惠券后，价格可能低于成本价。'}
-                    {check.riskValue > 0 && `风险值：${check.riskValue}%`}
+                  <p className={cn(
+                    'font-medium',
+                    check.riskLevel === 'high' ? 'text-red-800' : 'text-amber-800'
+                  )}>
+                    {check.riskLevel === 'high' ? '高风险提示' : '中风险提示'}
                   </p>
-                  <p className="text-sm text-red-600 mt-2">
+                  <p className={cn(
+                    'text-sm mt-1',
+                    check.riskLevel === 'high' ? 'text-red-600' : 'text-amber-600'
+                  )}>
+                    {check.riskDescription}
+                  </p>
+                  <p className={cn(
+                    'text-sm mt-2',
+                    check.riskLevel === 'high' ? 'text-red-600' : 'text-amber-600'
+                  )}>
                     建议：调整促销规则、提高活动价格或移除该商品
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+          {check.riskLevel === 'low' && check.riskDescription && (
+            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+              <div className="flex items-start gap-3">
+                <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium text-emerald-800">价格正常</p>
+                  <p className="text-sm text-emerald-600 mt-1">
+                    {check.riskDescription}
                   </p>
                 </div>
               </div>

@@ -4,17 +4,24 @@ import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
 
 export interface ExportActivityListItem {
-  activityName: string;
-  sku: string;
-  productName: string;
-  originalPrice: number;
-  activityPrice: number;
-  finalPrice: number;
-  costPrice: number;
-  stock: number;
-  margin: number;
-  riskLevel: string;
-  auditStatus: string;
+  活动名称: string;
+  SKU: string;
+  商品名称: string;
+  类目: string;
+  原价: number;
+  活动价: number;
+  店铺券: number;
+  平台券: number;
+  预计到手价: number;
+  成本价: number;
+  预计利润: number;
+  毛利率: string;
+  库存: number;
+  风险等级: string;
+  风险类型: string;
+  风险说明: string;
+  审核状态: string;
+  审核备注: string;
 }
 
 export const exportSignupList = (
@@ -25,25 +32,60 @@ export const exportSignupList = (
   const data: ExportActivityListItem[] = activity.productIds.map((productId) => {
     const product = products.find((p) => p.id === productId)!;
     const check = priceChecks.find((c) => c.productId === productId)!;
+    const profit = check.finalPrice - product.costPrice;
+    const margin = check.finalPrice > 0 ? ((profit / check.finalPrice) * 100).toFixed(1) + '%' : '-';
     
+    const riskTypes: string[] = [];
+    if (check.belowCost) riskTypes.push('低于成本');
+    if (check.couponRisk) riskTypes.push('叠券亏损');
+    if (check.nearCostRisk) riskTypes.push('接近成本');
+    if (riskTypes.length === 0) riskTypes.push('正常');
+
     return {
-      activityName: activity.name,
-      sku: product.sku,
-      productName: product.name,
-      originalPrice: product.salePrice,
-      activityPrice: check.activityPrice,
-      finalPrice: check.finalPrice,
-      costPrice: product.costPrice,
-      stock: product.stock,
-      margin: ((check.finalPrice - product.costPrice) / check.finalPrice) * 100,
-      riskLevel: check.riskLevel === 'low' ? '低风险' : check.riskLevel === 'medium' ? '中风险' : '高风险',
-      auditStatus: check.auditStatus === 'approved' ? '已通过' : check.auditStatus === 'rejected' ? '已驳回' : '待审核',
+      '活动名称': activity.name,
+      'SKU': product.sku,
+      '商品名称': product.name,
+      '类目': product.category,
+      '原价': product.salePrice,
+      '活动价': check.activityPrice,
+      '店铺券': check.shopCouponAmount || 0,
+      '平台券': check.platformCouponAmount || 0,
+      '预计到手价': check.finalPrice,
+      '成本价': product.costPrice,
+      '预计利润': profit,
+      '毛利率': margin,
+      '库存': product.stock,
+      '风险等级': check.riskLevel === 'low' ? '低风险' : check.riskLevel === 'medium' ? '中风险' : '高风险',
+      '风险类型': riskTypes.join('、'),
+      '风险说明': check.riskDescription || '',
+      '审核状态': check.auditStatus === 'approved' ? '已通过' : check.auditStatus === 'rejected' ? '已驳回' : '待审核',
+      '审核备注': check.auditRemark || '',
     };
   });
 
-  const ws = XLSX.utils.json_to_sheet(data);
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, '报名清单');
+
+  const summaryData = [
+    ['活动报名清单'],
+    [''],
+    ['活动信息'],
+    ['活动名称', activity.name],
+    ['活动时间', `${format(new Date(activity.startTime), 'yyyy-MM-dd')} 至 ${format(new Date(activity.endTime), 'yyyy-MM-dd')}`],
+    ['活动平台', activity.platform],
+    ['商品数量', `${activity.productIds.length} 件`],
+    [''],
+    ['审核汇总'],
+    ['已通过', `${priceChecks.filter(c => c.auditStatus === 'approved').length} 件`],
+    ['待审核', `${priceChecks.filter(c => c.auditStatus === 'pending').length} 件`],
+    ['已驳回', `${priceChecks.filter(c => c.auditStatus === 'rejected').length} 件`],
+    ['高风险', `${priceChecks.filter(c => c.riskLevel === 'high').length} 件`],
+  ];
+  const ws1 = XLSX.utils.aoa_to_sheet(summaryData);
+  XLSX.utils.book_append_sheet(wb, ws1, '活动概览');
+
+  const ws2 = XLSX.utils.json_to_sheet(data);
+  XLSX.utils.book_append_sheet(wb, ws2, '商品明细');
+
   XLSX.writeFile(wb, `活动报名清单_${activity.name}_${format(new Date(), 'yyyyMMdd')}.xlsx`);
 };
 

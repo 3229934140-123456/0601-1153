@@ -15,6 +15,7 @@ import {
   Save,
   Send,
   X,
+  AlertCircle,
 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '@/components/ui/Card';
@@ -27,6 +28,14 @@ import { calculateActivityPrice, calculateFinalPrice, formatCurrency } from '@/u
 import { formatDate } from '@/utils/date';
 import { cn } from '@/lib/utils';
 import type { PromotionRule, Activity } from '@/types';
+
+interface ValidationErrors {
+  activityName?: string;
+  startDate?: string;
+  endDate?: string;
+  platform?: string;
+  rules?: string;
+}
 
 export default function ActivityConfig() {
   const navigate = useNavigate();
@@ -56,6 +65,8 @@ export default function ActivityConfig() {
   const [rules, setRules] = useState<PromotionRule[]>(editingActivity?.promotionRules || []);
   const [showPreview, setShowPreview] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
+  const [showValidation, setShowValidation] = useState(false);
 
   const activityProducts = useMemo(() => {
     if (isEditing && editingActivity) {
@@ -89,18 +100,66 @@ export default function ActivityConfig() {
     setRules(rules.filter((r) => r.id !== ruleId));
   };
 
+  const validateForm = (): ValidationErrors => {
+    const errors: ValidationErrors = {};
+    if (!activityName.trim()) {
+      errors.activityName = '请输入活动名称';
+    }
+    if (!startDate) {
+      errors.startDate = '请选择活动开始日期';
+    } else if (isNaN(new Date(startDate).getTime())) {
+      errors.startDate = '开始日期格式不正确';
+    }
+    if (!endDate) {
+      errors.endDate = '请选择活动结束日期';
+    } else if (isNaN(new Date(endDate).getTime())) {
+      errors.endDate = '结束日期格式不正确';
+    } else if (startDate && !isNaN(new Date(startDate).getTime()) && new Date(endDate) < new Date(startDate)) {
+      errors.endDate = '结束日期不能早于开始日期';
+    }
+    if (!platform) {
+      errors.platform = '请选择适用平台';
+    }
+    if (rules.length === 0) {
+      errors.rules = '请至少配置一条促销规则';
+    }
+    return errors;
+  };
+
+  useEffect(() => {
+    const errors = validateForm();
+    setValidationErrors(errors);
+  }, [activityName, startDate, endDate, platform, rules.length]);
+
   const handleSave = (submitForReview: boolean = false) => {
+    const errors = validateForm();
+    setValidationErrors(errors);
+    setShowValidation(true);
+
+    if (submitForReview && Object.keys(errors).length > 0) {
+      return;
+    }
+
+    const safeStartDate = startDate && !isNaN(new Date(startDate).getTime())
+      ? new Date(startDate).toISOString()
+      : new Date().toISOString();
+    const safeEndDate = endDate && !isNaN(new Date(endDate).getTime())
+      ? new Date(endDate).toISOString()
+      : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
     const activityData = {
-      name: activityName,
+      name: activityName || '未命名活动',
       type: activityType,
-      startTime: new Date(startDate).toISOString(),
-      endTime: new Date(endDate).toISOString(),
-      platform,
+      startTime: safeStartDate,
+      endTime: safeEndDate,
+      platform: platform || 'taobao',
       status: (submitForReview ? 'pending' : 'draft') as Activity['status'],
       productIds: isEditing && editingActivity ? editingActivity.productIds : selectedProductIds,
       promotionRules: rules,
       description,
     };
+
+    let targetActivityId: string;
 
     if (isEditing && editingActivity) {
       updateActivity(editingActivity.id, activityData);
@@ -108,16 +167,23 @@ export default function ActivityConfig() {
       if (submitForReview) {
         submitActivityForReview(editingActivity.id);
       }
+      targetActivityId = editingActivity.id;
     } else {
       const newActivity = createActivity(activityData);
       updateActivityRules(newActivity.id, rules);
       if (submitForReview) {
         submitActivityForReview(newActivity.id);
       }
+      targetActivityId = newActivity.id;
     }
 
     setShowSaveModal(false);
-    navigate('/price-check');
+
+    if (submitForReview) {
+      navigate('/price-check');
+    } else {
+      navigate(`/activities/${targetActivityId}`, { replace: true });
+    }
   };
 
   const previewData = useMemo(() => {
@@ -182,6 +248,22 @@ export default function ActivityConfig() {
         </div>
       </div>
 
+      {showValidation && Object.keys(validationErrors).length > 0 && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium text-red-800">请完善以下必填项后再提交</p>
+              <ul className="text-sm text-red-600 mt-1 space-y-0.5">
+                {Object.values(validationErrors).map((msg, i) => (
+                  <li key={i}>· {msg}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
           <Card>
@@ -190,12 +272,26 @@ export default function ActivityConfig() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Input
-                  label="活动名称"
-                  placeholder="请输入活动名称"
-                  value={activityName}
-                  onChange={(e) => setActivityName(e.target.value)}
-                />
+                <div>
+                  <Input
+                    label={
+                      <span className="flex items-center gap-1">
+                        活动名称
+                        <span className="text-red-500">*</span>
+                      </span>
+                    }
+                    placeholder="请输入活动名称"
+                    value={activityName}
+                    onChange={(e) => setActivityName(e.target.value)}
+                    className={cn(validationErrors.activityName && 'border-red-400 focus:border-red-500 focus:ring-red-200')}
+                  />
+                  {validationErrors.activityName && (
+                    <p className="mt-1 text-xs text-red-500 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      {validationErrors.activityName}
+                    </p>
+                  )}
+                </div>
                 <Select
                   label="活动类型"
                   value={activityType}
@@ -211,43 +307,75 @@ export default function ActivityConfig() {
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="block text-sm font-medium text-slate-700">活动开始时间</label>
+                  <label className="block text-sm font-medium text-slate-700">
+                    活动开始时间
+                    <span className="text-red-500 ml-1">*</span>
+                  </label>
                   <div className="relative">
                     <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <Input
                       type="date"
                       value={startDate}
                       onChange={(e) => setStartDate(e.target.value)}
-                      className="pl-10"
+                      className={cn('pl-10', validationErrors.startDate && 'border-red-400 focus:border-red-500 focus:ring-red-200')}
                     />
                   </div>
+                  {validationErrors.startDate && (
+                    <p className="text-xs text-red-500 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      {validationErrors.startDate}
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-2">
-                  <label className="block text-sm font-medium text-slate-700">活动结束时间</label>
+                  <label className="block text-sm font-medium text-slate-700">
+                    活动结束时间
+                    <span className="text-red-500 ml-1">*</span>
+                  </label>
                   <div className="relative">
                     <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <Input
                       type="date"
                       value={endDate}
                       onChange={(e) => setEndDate(e.target.value)}
-                      className="pl-10"
+                      className={cn('pl-10', validationErrors.endDate && 'border-red-400 focus:border-red-500 focus:ring-red-200')}
                     />
                   </div>
+                  {validationErrors.endDate && (
+                    <p className="text-xs text-red-500 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      {validationErrors.endDate}
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Select
-                  label="适用平台"
-                  value={platform}
-                  onChange={(e) => setPlatform(e.target.value)}
-                >
-                  <option value="">请选择平台</option>
-                  {shops.map((shop) => (
-                    <option key={shop.platform} value={shop.platform}>
-                      {shop.platform === 'taobao' ? '淘宝' : shop.platform === 'jd' ? '京东' : shop.platform === 'pdd' ? '拼多多' : '抖音'}
-                    </option>
-                  ))}
-                </Select>
+                <div>
+                  <Select
+                    label={
+                      <span className="flex items-center gap-1">
+                        适用平台
+                        <span className="text-red-500">*</span>
+                      </span>
+                    }
+                    value={platform}
+                    onChange={(e) => setPlatform(e.target.value)}
+                    className={cn(validationErrors.platform && 'border-red-400 focus:border-red-500 focus:ring-red-200')}
+                  >
+                    <option value="">请选择平台</option>
+                    {shops.map((shop) => (
+                      <option key={shop.platform} value={shop.platform}>
+                        {shop.platform === 'taobao' ? '淘宝' : shop.platform === 'jd' ? '京东' : shop.platform === 'pdd' ? '拼多多' : '抖音'}
+                      </option>
+                    ))}
+                  </Select>
+                  {validationErrors.platform && (
+                    <p className="mt-1 text-xs text-red-500 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      {validationErrors.platform}
+                    </p>
+                  )}
+                </div>
                 <div className="flex items-end">
                   <Select
                     label="优惠叠加"
@@ -273,12 +401,23 @@ export default function ActivityConfig() {
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle>促销规则配置</CardTitle>
+                  <CardTitle>
+                    <span className="flex items-center gap-1">
+                      促销规则配置
+                      <span className="text-red-500 text-base">*</span>
+                    </span>
+                  </CardTitle>
                   <p className="text-sm text-slate-500 mt-1">
                     {activityType === 'discount' && '设置商品折扣率，如 85 折即输入 15'}
                     {activityType === 'full_reduce' && '设置满减档位，如满 200 减 30'}
                     {activityType === 'gift' && '设置买赠条件和赠品信息'}
                   </p>
+                  {validationErrors.rules && (
+                    <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      {validationErrors.rules}
+                    </p>
+                  )}
                 </div>
                 <Button onClick={addRule} size="sm">
                   <Plus className="w-4 h-4 mr-2" />

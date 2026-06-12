@@ -52,13 +52,27 @@ export interface PriceCheckRecord {
   originalPrice: number;
   activityPrice: number;
   finalPrice: number;
+  shopCouponAmount: number;
+  platformCouponAmount: number;
   belowCost: boolean;
   couponRisk: boolean;
+  nearCostRisk: boolean;
   riskValue: number;
   riskLevel: 'low' | 'medium' | 'high';
+  riskDescription: string;
   auditStatus: 'pending' | 'approved' | 'rejected';
   auditRemark?: string;
   auditedAt?: string;
+}
+
+export interface ImportedProductRow {
+  sku?: string;
+  name?: string;
+  category?: string;
+  costPrice?: number;
+  salePrice?: number;
+  stock?: number;
+  [key: string]: any;
 }
 
 export interface ActivityDailyData {
