@@ -70,6 +70,7 @@ export default function ActivityConfig() {
   const [targetGmv, setTargetGmv] = useState<number>(editingActivity?.targetGmv || 0);
   const [targetOrders, setTargetOrders] = useState<number>(editingActivity?.targetOrders || 0);
   const [targetProfitMargin, setTargetProfitMargin] = useState<number>(editingActivity?.targetProfitMargin || 0);
+  const [targetConversionRate, setTargetConversionRate] = useState<number>(editingActivity?.targetConversionRate || 0);
 
   const activityProducts = useMemo(() => {
     if (isEditing && editingActivity) {
@@ -163,6 +164,7 @@ export default function ActivityConfig() {
       targetGmv: targetGmv || undefined,
       targetOrders: targetOrders || undefined,
       targetProfitMargin: targetProfitMargin || undefined,
+      targetConversionRate: targetConversionRate || undefined,
     };
 
     let targetActivityId: string;
@@ -517,6 +519,15 @@ export default function ActivityConfig() {
                       placeholder="如 25"
                       value={targetProfitMargin || ''}
                       onChange={(e) => setTargetProfitMargin(Number(e.target.value) || 0)}
+                    />
+                  </div>
+                  <div>
+                    <Input
+                      type="number"
+                      label="转化率目标 (%)"
+                      placeholder="如 3.5"
+                      value={targetConversionRate || ''}
+                      onChange={(e) => setTargetConversionRate(Number(e.target.value) || 0)}
                     />
                   </div>
                 </div>

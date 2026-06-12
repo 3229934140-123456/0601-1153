@@ -21,6 +21,9 @@ import {
   Check,
   Download,
   ArrowRight,
+  History,
+  RotateCcw,
+  FileUp,
 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
@@ -30,8 +33,9 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { formatCurrency } from '@/utils/price';
+import { formatDate } from '@/utils/date';
 import { cn } from '@/lib/utils';
-import type { Product, ImportedProductRow } from '@/types';
+import type { Product, ImportedProductRow, ImportBatch } from '@/types';
 
 interface ImportPreviewItem {
   row: ImportedProductRow;
@@ -64,6 +68,7 @@ export default function ProductPool() {
   const {
     shops,
     products,
+    importBatches,
     selectedProductIds,
     currentFilter,
     setFilter,
@@ -73,7 +78,13 @@ export default function ProductPool() {
     getFilteredProducts,
     addProducts,
     importProductsFromShop,
+    createImportBatch,
+    updateImportBatch,
+    rollbackImportBatch,
   } = useAppStore();
+
+  const [showBatchModal, setShowBatchModal] = useState(false);
+  const [rollbackTarget, setRollbackTarget] = useState<ImportBatch | null>(null);
 
   const [showFilters, setShowFilters] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -217,10 +228,24 @@ export default function ProductPool() {
     }
 
     const validItems = previewData.filter((p) => p.isValid);
+    const invalidItems = previewData.filter((p) => !p.isValid);
     if (validItems.length === 0) {
       alert('没有可导入的有效商品数据');
       return;
     }
+
+    const failReasons = Array.from(new Set(invalidItems.flatMap((i) => i.errors)));
+
+    const batch = createImportBatch({
+      sourceType: 'file',
+      sourceName: 'Excel文件导入',
+      shopId: importShopId,
+      totalCount: previewData.length,
+      successCount: validItems.length,
+      failCount: invalidItems.length,
+      failReasons,
+      productIds: [],
+    });
 
     const newProducts = validItems.map((item) => {
       const r = item.mappedRow;
@@ -239,7 +264,9 @@ export default function ProductPool() {
       };
     });
 
-    addProducts(newProducts);
+    const added = addProducts(newProducts, batch.id);
+    updateImportBatch(batch.id, { productIds: added.map((p) => p.id) });
+
     setImportedCount(newProducts.length);
     setImportStep('success');
   };
@@ -247,7 +274,7 @@ export default function ProductPool() {
   const handleShopSync = async (shopId: string) => {
     setIsSyncing(shopId);
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    const imported = importProductsFromShop(shopId, 10);
+    const { products: imported } = importProductsFromShop(shopId, 10);
     setIsSyncing(null);
     setImportedCount(imported.length);
     setImportStep('success');
@@ -297,6 +324,10 @@ export default function ProductPool() {
           <p className="text-slate-500 mt-1">管理店铺商品，筛选优质品参与促销活动</p>
         </div>
         <div className="flex items-center gap-3">
+          <Button variant="secondary" onClick={() => setShowBatchModal(true)}>
+            <History className="w-4 h-4 mr-2" />
+            导入记录
+          </Button>
           <Button variant="secondary" onClick={() => { resetImportModal(); setShowImportModal(true); }}>
             <Upload className="w-4 h-4 mr-2" />
             导入商品
@@ -805,6 +836,137 @@ export default function ProductPool() {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal
+        isOpen={showBatchModal}
+        onClose={() => setShowBatchModal(false)}
+        title="导入批次记录"
+        description="查看历史导入记录，可回滚误导入的批次"
+        size="lg"
+      >
+        <div className="space-y-4">
+          {importBatches.length === 0 ? (
+            <div className="py-12 text-center text-slate-500">
+              <History className="w-12 h-12 mx-auto mb-4 text-slate-300" />
+              <p>暂无导入批次记录</p>
+              <p className="text-sm mt-1">从商品池导入或同步商品后会产生批次记录</p>
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-[500px] overflow-y-auto">
+              {importBatches.map((batch) => {
+                const shopName = shops.find((s) => s.id === batch.shopId)?.name || '-';
+                return (
+                  <div
+                    key={batch.id}
+                    className={cn(
+                      'p-4 border rounded-xl transition-all',
+                      batch.status === 'rolled_back'
+                        ? 'border-slate-200 bg-slate-50 opacity-60'
+                        : 'border-slate-200 hover:border-blue-300 hover:bg-blue-50/30'
+                    )}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-start gap-3">
+                        <div className={cn(
+                          'p-2 rounded-lg',
+                          batch.sourceType === 'file' ? 'bg-purple-100' : 'bg-blue-100'
+                        )}>
+                          {batch.sourceType === 'file' ? (
+                            <FileUp className="w-5 h-5 text-purple-600" />
+                          ) : (
+                            <Store className="w-5 h-5 text-blue-600" />
+                          )}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-slate-800">
+                              {batch.sourceName}
+                            </span>
+                            <Badge variant={batch.status === 'active' ? 'success' : 'warning'}>
+                              {batch.status === 'active' ? '有效' : '已回滚'}
+                            </Badge>
+                          </div>
+                          <p className="text-sm text-slate-500 mt-1">
+                            {shopName} · {formatDate(batch.createdAt)}
+                          </p>
+                          <div className="flex items-center gap-4 mt-2 text-sm">
+                            <span className="text-slate-600">
+                              共 <span className="font-medium text-slate-800">{batch.totalCount}</span> 条
+                            </span>
+                            <span className="text-emerald-600">
+                              成功 {batch.successCount}
+                            </span>
+                            <span className="text-red-600">
+                              失败 {batch.failCount}
+                            </span>
+                          </div>
+                          {batch.failReasons.length > 0 && (
+                            <div className="mt-2 text-xs text-slate-500">
+                              <span className="text-red-500">失败原因：</span>
+                              {batch.failReasons.join('、')}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      {batch.status === 'active' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setRollbackTarget(batch)}
+                        >
+                          <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+                          回滚
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={!!rollbackTarget}
+        onClose={() => setRollbackTarget(null)}
+        title="确认回滚"
+        description="回滚后该批次导入的所有商品将被删除，且无法恢复"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium text-amber-800">
+                  确定回滚「{rollbackTarget?.sourceName}」批次？
+                </p>
+                <p className="text-sm text-amber-600 mt-1">
+                  该批次共 {rollbackTarget?.successCount} 件商品将从商品池中移除
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={() => setRollbackTarget(null)}>
+              取消
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                if (rollbackTarget) {
+                  rollbackImportBatch(rollbackTarget.id);
+                  setRollbackTarget(null);
+                }
+              }}
+            >
+              <RotateCcw className="w-4 h-4 mr-2" />
+              确认回滚
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

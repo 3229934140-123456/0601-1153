@@ -15,6 +15,7 @@ import {
   Download,
   Clock,
   Ban,
+  User,
 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
@@ -25,7 +26,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { MetricCard } from '@/components/ui/MetricCard';
 import { formatCurrency } from '@/utils/price';
-import { formatDate, formatDateRange } from '@/utils/date';
+import { formatDate, formatDateRange, formatDateTime } from '@/utils/date';
 import { exportSignupList } from '@/utils/export';
 import { cn } from '@/lib/utils';
 import {
@@ -35,6 +36,8 @@ import {
   riskLevelColors,
   auditStatusLabels,
   auditStatusColors,
+  auditTypeLabels,
+  auditTypeColors,
   platformLabels,
 } from '@/types';
 import type { Activity, PriceCheckRecord } from '@/types';
@@ -94,10 +97,12 @@ export default function PriceCheck() {
     const couponRisk = activityChecks.filter((c) => c.couponRisk).length;
     const nearCostRisk = activityChecks.filter((c) => c.nearCostRisk).length;
     const approved = activityChecks.filter((c) => c.auditStatus === 'approved').length;
+    const normalApproved = activityChecks.filter((c) => c.auditType === 'normal_approved').length;
+    const remarkApproved = activityChecks.filter((c) => c.auditType === 'remark_approved').length;
     const rejected = activityChecks.filter((c) => c.auditStatus === 'rejected').length;
     const pending = activityChecks.filter((c) => c.auditStatus === 'pending').length;
 
-    return { total, highRisk, mediumRisk, lowRisk, belowCost, couponRisk, nearCostRisk, approved, rejected, pending };
+    return { total, highRisk, mediumRisk, lowRisk, belowCost, couponRisk, nearCostRisk, approved, normalApproved, remarkApproved, rejected, pending };
   }, [activityChecks]);
 
   const handleRunCheck = async () => {
@@ -301,18 +306,22 @@ export default function PriceCheck() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-3 gap-4 mb-6">
-                    <div className="p-4 bg-slate-50 rounded-xl">
-                      <p className="text-sm text-slate-500">已通过</p>
-                      <p className="text-2xl font-bold text-emerald-600 mt-1">{stats.approved}</p>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                    <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100">
+                      <p className="text-sm text-emerald-600">正常通过</p>
+                      <p className="text-2xl font-bold text-emerald-700 mt-1">{stats.normalApproved}</p>
                     </div>
-                    <div className="p-4 bg-slate-50 rounded-xl">
-                      <p className="text-sm text-slate-500">待审核</p>
-                      <p className="text-2xl font-bold text-amber-600 mt-1">{stats.pending}</p>
+                    <div className="p-4 bg-purple-50 rounded-xl border border-purple-100">
+                      <p className="text-sm text-purple-600">备注放行</p>
+                      <p className="text-2xl font-bold text-purple-700 mt-1">{stats.remarkApproved}</p>
                     </div>
-                    <div className="p-4 bg-slate-50 rounded-xl">
-                      <p className="text-sm text-slate-500">已驳回</p>
-                      <p className="text-2xl font-bold text-red-600 mt-1">{stats.rejected}</p>
+                    <div className="p-4 bg-amber-50 rounded-xl border border-amber-100">
+                      <p className="text-sm text-amber-600">待审核</p>
+                      <p className="text-2xl font-bold text-amber-700 mt-1">{stats.pending}</p>
+                    </div>
+                    <div className="p-4 bg-red-50 rounded-xl border border-red-100">
+                      <p className="text-sm text-red-600">已驳回</p>
+                      <p className="text-2xl font-bold text-red-700 mt-1">{stats.rejected}</p>
                     </div>
                   </div>
 
@@ -347,9 +356,8 @@ export default function PriceCheck() {
                           <TableHead className="text-right">活动价</TableHead>
                           <TableHead className="text-right">到手价</TableHead>
                           <TableHead className="text-center">风险等级</TableHead>
-                          <TableHead className="text-center">风险类型</TableHead>
-                          <TableHead className="text-center">审核状态</TableHead>
-                          <TableHead className="text-center">备注</TableHead>
+                          <TableHead className="text-center">审核结果</TableHead>
+                          <TableHead className="text-center">操作人/时间</TableHead>
                           <TableHead className="text-center">操作</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -438,19 +446,32 @@ export default function PriceCheck() {
         onClose={() => setShowApproveModal(false)}
         title="通过审核"
         description="确认通过该活动的价格校验，审核通过后可导出报名清单"
-        size="sm"
+        size="md"
       >
         <div className="space-y-4">
-          {!canApprove && (
+          {stats.remarkApproved > 0 && (
+            <div className="p-4 bg-purple-50 border border-purple-200 rounded-xl">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-purple-500 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium text-purple-800">
+                    含 {stats.remarkApproved} 件备注放行商品
+                  </p>
+                  <p className="text-sm text-purple-600 mt-1">
+                    部分高风险商品已通过备注放行，请注意后续监控价格和利润情况
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+          {stats.pending > 0 && (
             <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
               <div className="flex items-start gap-3">
                 <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
                 <div>
-                  <p className="font-medium text-amber-800">存在未处理的风险商品</p>
+                  <p className="font-medium text-amber-800">存在待审核商品</p>
                   <p className="text-sm text-amber-600 mt-1">
-                    {stats.pending > 0 && `仍有 ${stats.pending} 件待审核商品，`}
-                    {stats.highRisk > 0 && `${stats.highRisk} 件高风险商品未驳回，`}
-                    建议先处理所有商品后再审核通过
+                    仍有 {stats.pending} 件商品待审核，建议先逐个处理后再整体通过
                   </p>
                 </div>
               </div>
@@ -458,15 +479,30 @@ export default function PriceCheck() {
           )}
           <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
             <p className="font-medium text-blue-800">{selectedActivity?.name}</p>
-            <p className="text-sm text-blue-600 mt-1">
-              共 {stats.total} 件商品，{stats.approved} 件已通过，{stats.pending} 件待审核
-            </p>
+            <div className="grid grid-cols-2 gap-3 mt-2 text-sm">
+              <div>
+                <span className="text-blue-500">正常通过</span>
+                <span className="font-medium text-blue-800 ml-2">{stats.normalApproved} 件</span>
+              </div>
+              <div>
+                <span className="text-purple-500">备注放行</span>
+                <span className="font-medium text-purple-700 ml-2">{stats.remarkApproved} 件</span>
+              </div>
+              <div>
+                <span className="text-amber-500">待审核</span>
+                <span className="font-medium text-amber-700 ml-2">{stats.pending} 件</span>
+              </div>
+              <div>
+                <span className="text-red-500">已驳回</span>
+                <span className="font-medium text-red-700 ml-2">{stats.rejected} 件</span>
+              </div>
+            </div>
           </div>
           <div className="flex justify-end gap-3">
             <Button variant="ghost" onClick={() => setShowApproveModal(false)}>
               取消
             </Button>
-            <Button onClick={handleApprove}>
+            <Button onClick={handleApprove} disabled={!canApprove}>
               <CheckCircle2 className="w-4 h-4 mr-2" />
               确认通过
             </Button>
@@ -579,6 +615,8 @@ function PriceCheckRow({ check, product, activityStatus, onApprove, onReject }: 
   if (check.nearCostRisk) riskTypes.push('近成本线');
   if (riskTypes.length === 0) riskTypes.push('正常');
 
+  const displayAuditType = check.auditType || (check.auditStatus === 'approved' ? 'normal_approved' : check.auditStatus === 'rejected' ? 'rejected' : 'pending');
+
   return (
     <>
       <TableRow className={cn(check.riskLevel === 'high' && 'bg-red-50/30')}>
@@ -610,23 +648,32 @@ function PriceCheckRow({ check, product, activityStatus, onApprove, onReject }: 
           </Badge>
         </TableCell>
         <TableCell className="text-center">
-          {riskTypes.map((type, i) => (
-            <Badge
-              key={i}
-              variant={type === '正常' ? 'success' : type === '低于成本' ? 'danger' : 'warning'}
-              className={i > 0 ? 'ml-1' : ''}
-            >
-              {type}
+          <div className="flex flex-col items-center gap-1">
+            <Badge className={auditTypeColors[displayAuditType as keyof typeof auditTypeColors]}>
+              {auditTypeLabels[displayAuditType as keyof typeof auditTypeLabels]}
             </Badge>
-          ))}
+            {check.auditRemark && (
+              <span className="text-xs text-slate-500 max-w-[140px] truncate" title={check.auditRemark}>
+                备注: {check.auditRemark}
+              </span>
+            )}
+          </div>
         </TableCell>
         <TableCell className="text-center">
-          <Badge className={auditStatusColors[check.auditStatus]}>
-            {auditStatusLabels[check.auditStatus]}
-          </Badge>
-        </TableCell>
-        <TableCell className="text-center text-xs text-slate-500 max-w-[120px] truncate" title={check.auditRemark}>
-          {check.auditRemark || '-'}
+          {check.auditedAt ? (
+            <div className="flex flex-col items-center gap-0.5 text-xs">
+              <div className="flex items-center gap-1 text-slate-600">
+                <User className="w-3 h-3" />
+                <span>{check.auditor || '-'}</span>
+              </div>
+              <div className="flex items-center gap-1 text-slate-400">
+                <Clock className="w-3 h-3" />
+                <span>{formatDateTime(check.auditedAt)}</span>
+              </div>
+            </div>
+          ) : (
+            <span className="text-xs text-slate-400">-</span>
+          )}
         </TableCell>
         <TableCell className="text-center">
           <div className="flex items-center justify-center gap-2">

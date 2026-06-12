@@ -1,12 +1,13 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Product, Shop, Activity, PriceCheckRecord, ActivityDailyData, ProductFilter, PromotionRule, ImportedProductRow } from '../types';
+import type { Product, Shop, Activity, PriceCheckRecord, ActivityDailyData, ProductFilter, PromotionRule, ImportedProductRow, ImportBatch, AuditType } from '../types';
 import { mockShops, mockProducts, mockActivities, mockPriceCheckRecords, mockActivityData, mockSelectedProductIds } from '../data/mockData';
 import { generatePriceCheckRecord } from '../utils/price';
 
 interface AppState {
   shops: Shop[];
   products: Product[];
+  importBatches: ImportBatch[];
   activities: Activity[];
   priceCheckRecords: PriceCheckRecord[];
   activityData: ActivityDailyData[];
@@ -20,8 +21,11 @@ interface AppState {
   clearSelectedProducts: () => void;
   setCurrentActivity: (activityId: string | null) => void;
 
-  addProducts: (products: Omit<Product, 'id' | 'createdAt'>[]) => Product[];
-  importProductsFromShop: (shopId: string, count?: number) => Product[];
+  addProducts: (products: Omit<Product, 'id' | 'createdAt'>[], batchId?: string) => Product[];
+  importProductsFromShop: (shopId: string, count?: number) => { products: Product[]; batch: ImportBatch };
+  createImportBatch: (data: Omit<ImportBatch, 'id' | 'createdAt' | 'status'>) => ImportBatch;
+  updateImportBatch: (batchId: string, data: Partial<ImportBatch>) => void;
+  rollbackImportBatch: (batchId: string) => void;
 
   createActivity: (data: Omit<Activity, 'id' | 'createdAt' | 'totalDiscount'>) => Activity;
   updateActivity: (activityId: string, data: Partial<Activity>) => void;
@@ -32,7 +36,7 @@ interface AppState {
   canApproveActivity: (activityId: string) => boolean;
 
   runPriceCheck: (activityId: string) => PriceCheckRecord[];
-  updatePriceCheckAudit: (checkId: string, status: PriceCheckRecord['auditStatus'], remark?: string) => void;
+  updatePriceCheckAudit: (checkId: string, status: PriceCheckRecord['auditStatus'], remark?: string, auditType?: AuditType) => void;
   batchUpdatePriceCheckAudit: (activityId: string, status: PriceCheckRecord['auditStatus'], remark?: string) => void;
 
   addOrUpdateActivityDailyData: (activityId: string, data: Omit<ActivityDailyData, 'id' | 'activityId'>) => void;
@@ -58,6 +62,7 @@ export const useAppStore = create<AppState>()(
     (set, get) => ({
       shops: mockShops,
       products: mockProducts,
+      importBatches: [],
       activities: mockActivities,
       priceCheckRecords: mockPriceCheckRecords,
       activityData: mockActivityData,
@@ -79,11 +84,12 @@ export const useAppStore = create<AppState>()(
 
       setCurrentActivity: (activityId) => set({ currentActivityId: activityId }),
 
-      addProducts: (newProducts) => {
+      addProducts: (newProducts, batchId) => {
         const products: Product[] = newProducts.map((p) => ({
           ...p,
           id: `prod-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
           createdAt: new Date().toISOString(),
+          importBatchId: batchId,
         }));
         set((state) => ({ products: [...state.products, ...products] }));
         return products;
@@ -91,8 +97,9 @@ export const useAppStore = create<AppState>()(
 
       importProductsFromShop: (shopId, count = 10) => {
         const shop = get().shops.find((s) => s.id === shopId);
-        if (!shop) return [];
+        if (!shop) return { products: [], batch: {} as ImportBatch };
 
+        const batchId = `batch-${Date.now()}`;
         const sampleCategories = ['服饰', '数码', '美妆', '家居', '食品', '母婴', '运动'];
         const sampleNames = [
           '新款休闲装', '无线耳机', '保湿面霜', '简约台灯', '坚果礼盒',
@@ -116,11 +123,60 @@ export const useAppStore = create<AppState>()(
             margin: Math.round(((salePrice - costPrice) / salePrice) * 100),
             shopId,
             createdAt: new Date().toISOString(),
+            importBatchId: batchId,
           });
         }
 
-        set((state) => ({ products: [...state.products, ...imported] }));
-        return imported;
+        const batch: ImportBatch = {
+          id: batchId,
+          sourceType: 'shop',
+          sourceName: shop.name,
+          shopId,
+          totalCount: count,
+          successCount: count,
+          failCount: 0,
+          failReasons: [],
+          productIds: imported.map((p) => p.id),
+          createdAt: new Date().toISOString(),
+          status: 'active',
+        };
+
+        set((state) => ({
+          products: [...state.products, ...imported],
+          importBatches: [batch, ...state.importBatches],
+        }));
+        return { products: imported, batch };
+      },
+
+      createImportBatch: (data) => {
+        const batch: ImportBatch = {
+          ...data,
+          id: `batch-${Date.now()}`,
+          createdAt: new Date().toISOString(),
+          status: 'active',
+        };
+        set((state) => ({ importBatches: [batch, ...state.importBatches] }));
+        return batch;
+      },
+
+      updateImportBatch: (batchId, data) => set((state) => ({
+        importBatches: state.importBatches.map((b) =>
+          b.id === batchId ? { ...b, ...data } : b
+        ),
+      })),
+
+      rollbackImportBatch: (batchId) => {
+        set((state) => {
+          const batch = state.importBatches.find((b) => b.id === batchId);
+          if (!batch || batch.status === 'rolled_back') return state;
+          return {
+            products: state.products.filter((p) => p.importBatchId !== batchId),
+            importBatches: state.importBatches.map((b) =>
+              b.id === batchId ? { ...b, status: 'rolled_back' } : b
+            ),
+            selectedProductIds: state.selectedProductIds.filter((id) => !batch.productIds.includes(id)),
+          };
+        });
       },
 
       createActivity: (data) => {
@@ -151,11 +207,18 @@ export const useAppStore = create<AppState>()(
         const activity = state.getActivityById(activityId);
         set({
           activities: state.activities.map((a) => (a.id === activityId ? { ...a, status: 'approved' } : a)),
-          priceCheckRecords: state.priceCheckRecords.map((c) =>
-            c.activityId === activityId && c.auditStatus === 'pending'
-              ? { ...c, auditStatus: 'approved', auditedAt: new Date().toISOString() }
-              : c
-          ),
+          priceCheckRecords: state.priceCheckRecords.map((c) => {
+            if (c.activityId !== activityId || c.auditStatus !== 'pending') return c;
+            const isHighRisk = c.riskLevel === 'high';
+            const auditType: AuditType = isHighRisk ? 'remark_approved' : 'normal_approved';
+            return {
+              ...c,
+              auditStatus: 'approved',
+              auditType,
+              auditedAt: new Date().toISOString(),
+              auditor: '系统自动',
+            };
+          }),
         });
         if (activity) {
           get().generateActivityDailyData(activityId);
@@ -166,7 +229,7 @@ export const useAppStore = create<AppState>()(
         activities: state.activities.map((a) => (a.id === activityId ? { ...a, status: 'rejected' } : a)),
         priceCheckRecords: state.priceCheckRecords.map((c) =>
           c.activityId === activityId && c.auditStatus === 'pending'
-            ? { ...c, auditStatus: 'rejected', auditRemark: remark, auditedAt: new Date().toISOString() }
+            ? { ...c, auditStatus: 'rejected', auditType: 'rejected', auditRemark: remark, auditedAt: new Date().toISOString(), auditor: '运营人员' }
             : c
         ),
       })),
@@ -174,9 +237,8 @@ export const useAppStore = create<AppState>()(
       canApproveActivity: (activityId) => {
         const checks = get().getActivityPriceChecks(activityId);
         if (checks.length === 0) return false;
-        const hasHighRisk = checks.some((c) => c.riskLevel === 'high' && c.auditStatus !== 'rejected');
         const hasPending = checks.some((c) => c.auditStatus === 'pending');
-        return !hasHighRisk && !hasPending;
+        return !hasPending;
       },
 
       runPriceCheck: (activityId) => {
@@ -198,20 +260,46 @@ export const useAppStore = create<AppState>()(
         return newRecords;
       },
 
-      updatePriceCheckAudit: (checkId, status, remark) => set((state) => ({
-        priceCheckRecords: state.priceCheckRecords.map((c) =>
-          c.id === checkId
-            ? { ...c, auditStatus: status, auditRemark: remark, auditedAt: new Date().toISOString() }
-            : c
-        ),
+      updatePriceCheckAudit: (checkId, status, remark, auditType) => set((state) => ({
+        priceCheckRecords: state.priceCheckRecords.map((c) => {
+          if (c.id !== checkId) return c;
+          let computedType: AuditType = auditType || 'pending';
+          if (!auditType) {
+            if (status === 'rejected') {
+              computedType = 'rejected';
+            } else if (status === 'approved') {
+              computedType = remark && remark.trim() ? 'remark_approved' : 'normal_approved';
+            }
+          }
+          return {
+            ...c,
+            auditStatus: status,
+            auditType: computedType,
+            auditRemark: remark,
+            auditedAt: new Date().toISOString(),
+            auditor: '运营人员',
+          };
+        }),
       })),
 
       batchUpdatePriceCheckAudit: (activityId, status, remark) => set((state) => ({
-        priceCheckRecords: state.priceCheckRecords.map((c) =>
-          c.activityId === activityId
-            ? { ...c, auditStatus: status, auditRemark: remark, auditedAt: new Date().toISOString() }
-            : c
-        ),
+        priceCheckRecords: state.priceCheckRecords.map((c) => {
+          if (c.activityId !== activityId) return c;
+          let computedType: AuditType = 'pending';
+          if (status === 'rejected') {
+            computedType = 'rejected';
+          } else if (status === 'approved') {
+            computedType = remark && remark.trim() ? 'remark_approved' : 'normal_approved';
+          }
+          return {
+            ...c,
+            auditStatus: status,
+            auditType: computedType,
+            auditRemark: remark,
+            auditedAt: new Date().toISOString(),
+            auditor: '运营人员',
+          };
+        }),
       })),
 
       getFilteredProducts: () => {
@@ -341,6 +429,7 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         shops: state.shops,
         products: state.products,
+        importBatches: state.importBatches,
         activities: state.activities,
         priceCheckRecords: state.priceCheckRecords,
         activityData: state.activityData,

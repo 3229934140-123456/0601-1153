@@ -20,8 +20,10 @@ export interface ExportActivityListItem {
   风险等级: string;
   风险类型: string;
   风险说明: string;
-  审核状态: string;
+  审核结果: string;
   审核备注: string;
+  操作人: string;
+  审核时间: string;
 }
 
 export const exportSignupList = (
@@ -41,6 +43,13 @@ export const exportSignupList = (
     if (check.nearCostRisk) riskTypes.push('接近成本');
     if (riskTypes.length === 0) riskTypes.push('正常');
 
+    const auditTypeLabel = check.auditType === 'normal_approved' ? '正常通过'
+      : check.auditType === 'remark_approved' ? '备注放行'
+      : check.auditType === 'rejected' ? '已驳回'
+      : check.auditStatus === 'approved' ? '正常通过'
+      : check.auditStatus === 'rejected' ? '已驳回'
+      : '待审核';
+
     return {
       '活动名称': activity.name,
       'SKU': product.sku,
@@ -58,12 +67,19 @@ export const exportSignupList = (
       '风险等级': check.riskLevel === 'low' ? '低风险' : check.riskLevel === 'medium' ? '中风险' : '高风险',
       '风险类型': riskTypes.join('、'),
       '风险说明': check.riskDescription || '',
-      '审核状态': check.auditStatus === 'approved' ? '已通过' : check.auditStatus === 'rejected' ? '已驳回' : '待审核',
+      '审核结果': auditTypeLabel,
       '审核备注': check.auditRemark || '',
+      '操作人': check.auditor || '',
+      '审核时间': check.auditedAt ? format(new Date(check.auditedAt), 'yyyy-MM-dd HH:mm:ss', { locale: zhCN }) : '',
     };
   });
 
   const wb = XLSX.utils.book_new();
+
+  const normalApproved = priceChecks.filter(c => c.auditType === 'normal_approved').length;
+  const remarkApproved = priceChecks.filter(c => c.auditType === 'remark_approved').length;
+  const rejected = priceChecks.filter(c => c.auditStatus === 'rejected').length;
+  const pending = priceChecks.filter(c => c.auditStatus === 'pending').length;
 
   const summaryData = [
     ['活动报名清单'],
@@ -75,9 +91,10 @@ export const exportSignupList = (
     ['商品数量', `${activity.productIds.length} 件`],
     [''],
     ['审核汇总'],
-    ['已通过', `${priceChecks.filter(c => c.auditStatus === 'approved').length} 件`],
-    ['待审核', `${priceChecks.filter(c => c.auditStatus === 'pending').length} 件`],
-    ['已驳回', `${priceChecks.filter(c => c.auditStatus === 'rejected').length} 件`],
+    ['正常通过', `${normalApproved} 件`],
+    ['备注放行', `${remarkApproved} 件`],
+    ['待审核', `${pending} 件`],
+    ['已驳回', `${rejected} 件`],
     ['高风险', `${priceChecks.filter(c => c.riskLevel === 'high').length} 件`],
   ];
   const ws1 = XLSX.utils.aoa_to_sheet(summaryData);

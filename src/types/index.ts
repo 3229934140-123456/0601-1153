@@ -10,6 +10,21 @@ export interface Product {
   margin: number;
   shopId: string;
   createdAt: string;
+  importBatchId?: string;
+}
+
+export interface ImportBatch {
+  id: string;
+  sourceType: 'file' | 'shop';
+  sourceName: string;
+  shopId?: string;
+  totalCount: number;
+  successCount: number;
+  failCount: number;
+  failReasons: string[];
+  productIds: string[];
+  createdAt: string;
+  status: 'active' | 'rolled_back';
 }
 
 export interface Shop {
@@ -46,7 +61,10 @@ export interface Activity {
   targetGmv?: number;
   targetOrders?: number;
   targetProfitMargin?: number;
+  targetConversionRate?: number;
 }
+
+export type AuditType = 'pending' | 'normal_approved' | 'remark_approved' | 'rejected';
 
 export interface PriceCheckRecord {
   id: string;
@@ -64,8 +82,10 @@ export interface PriceCheckRecord {
   riskLevel: 'low' | 'medium' | 'high';
   riskDescription: string;
   auditStatus: 'pending' | 'approved' | 'rejected';
+  auditType?: AuditType;
   auditRemark?: string;
   auditedAt?: string;
+  auditor?: string;
 }
 
 export interface ImportedProductRow {
@@ -161,5 +181,19 @@ export const auditStatusLabels: Record<PriceCheckRecord['auditStatus'], string> 
 export const auditStatusColors: Record<PriceCheckRecord['auditStatus'], string> = {
   pending: 'bg-amber-100 text-amber-700',
   approved: 'bg-emerald-100 text-emerald-700',
+  rejected: 'bg-red-100 text-red-700',
+};
+
+export const auditTypeLabels: Record<AuditType, string> = {
+  pending: '待审核',
+  normal_approved: '正常通过',
+  remark_approved: '备注放行',
+  rejected: '已驳回',
+};
+
+export const auditTypeColors: Record<AuditType, string> = {
+  pending: 'bg-amber-100 text-amber-700',
+  normal_approved: 'bg-emerald-100 text-emerald-700',
+  remark_approved: 'bg-purple-100 text-purple-700',
   rejected: 'bg-red-100 text-red-700',
 };

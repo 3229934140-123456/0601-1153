@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   BarChart3,
   TrendingUp,
@@ -23,6 +23,7 @@ import {
   Plus,
   AlertTriangle,
   Target,
+  Store,
 } from 'lucide-react';
 import {
   BarChart,
@@ -51,7 +52,7 @@ import { formatDate, formatDateRange, getCalendarDays, getMonthLabel, isToday, i
 import { exportDashboardReport } from '@/utils/export';
 import { cn } from '@/lib/utils';
 import { statusLabels, statusColors, platformLabels } from '@/types';
-import type { Activity } from '@/types';
+import type { Activity, Shop } from '@/types';
 
 export default function Dashboard() {
   const {
@@ -62,6 +63,7 @@ export default function Dashboard() {
     getActivityById,
     getActivityDailyData,
     getActivitySummary,
+    getActivityProducts,
     addOrUpdateActivityDailyData,
   } = useAppStore();
 
@@ -95,16 +97,24 @@ export default function Dashboard() {
 
   const allActivities = activities;
 
+  const getActivityShops = useCallback((activityId: string): Shop[] => {
+    const prods = getActivityProducts(activityId);
+    const shopIds = new Set(prods.map((p) => p.shopId).filter(Boolean));
+    return shops.filter((s) => shopIds.has(s.id));
+  }, [getActivityProducts, shops]);
+
   const filteredCalendarActivities = useMemo(() => {
     return allActivities.filter((a) => {
+      if (a.status === 'draft') return false;
       if (calendarPlatformFilter && a.platform !== calendarPlatformFilter) return false;
       if (calendarShopFilter) {
-        const shop = shops.find((s) => s.platform === a.platform);
-        if (!shop || shop.id !== calendarShopFilter) return false;
+        const activityShops = getActivityShops(a.id);
+        const hasShop = activityShops.some((s) => s.id === calendarShopFilter);
+        if (!hasShop) return false;
       }
-      return a.status !== 'draft';
+      return true;
     });
-  }, [allActivities, calendarPlatformFilter, calendarShopFilter, shops]);
+  }, [allActivities, calendarPlatformFilter, calendarShopFilter, getActivityShops]);
 
   const targetAchievement = useMemo(() => {
     if (!selectedActivity || !summary) return null;
@@ -112,32 +122,70 @@ export default function Dashboard() {
     const ordersRate = selectedActivity.targetOrders ? (summary.totalOrders / selectedActivity.targetOrders) * 100 : null;
     const profitMargin = summary.totalGmv > 0 ? (summary.totalProfit / summary.totalGmv) * 100 : 0;
     const profitRate = selectedActivity.targetProfitMargin ? (profitMargin / selectedActivity.targetProfitMargin) * 100 : null;
+    const conversionRate = summary.avgConversionRate;
+    const conversionRateTarget = selectedActivity.targetConversionRate;
+    const conversionRate_achieved = conversionRateTarget ? (conversionRate / conversionRateTarget) * 100 : null;
 
     const alerts: string[] = [];
     if (gmvRate !== null && gmvRate < 50) alerts.push('成交额达成率低于 50%');
     if (ordersRate !== null && ordersRate < 50) alerts.push('订单数达成率低于 50%');
     if (profitRate !== null && profitRate < 60) alerts.push('毛利率低于目标 60%');
+    if (conversionRate_achieved !== null && conversionRate_achieved < 60) alerts.push('转化率低于目标 60%');
 
     return {
       gmvRate,
       ordersRate,
       profitRate,
       profitMargin,
+      conversionRate_achieved,
+      conversionRate,
       alerts,
-      hasTarget: !!(selectedActivity.targetGmv || selectedActivity.targetOrders || selectedActivity.targetProfitMargin),
+      hasTarget: !!(selectedActivity.targetGmv || selectedActivity.targetOrders || selectedActivity.targetProfitMargin || selectedActivity.targetConversionRate),
     };
   }, [selectedActivity, summary]);
 
-  const dailyAlerts = useMemo(() => {
-    if (!selectedActivity || !selectedActivity.targetGmv) return new Map<string, boolean>();
-    const alertMap = new Map<string, boolean>();
-    const daysElapsed = dailyData.length;
-    if (daysElapsed === 0) return alertMap;
-    const expectedDailyGmv = selectedActivity.targetGmv / Math.max(daysElapsed, 1);
+  interface DailyAlertInfo {
+    hasAlert: boolean;
+    failedMetrics: string[];
+    gmvOk: boolean;
+    ordersOk: boolean;
+    profitOk: boolean;
+    conversionOk: boolean;
+  }
+
+  const dailyAlerts = useMemo<Map<string, DailyAlertInfo>>(() => {
+    const alertMap = new Map<string, DailyAlertInfo>();
+    if (!selectedActivity) return alertMap;
+    if (dailyData.length === 0) return alertMap;
+
+    const hasTarget = selectedActivity.targetGmv || selectedActivity.targetOrders || selectedActivity.targetProfitMargin || selectedActivity.targetConversionRate;
+    if (!hasTarget) return alertMap;
+
+    const days = dailyData.length;
+    const expectedDailyGmv = selectedActivity.targetGmv ? selectedActivity.targetGmv / Math.max(days, 1) : 0;
+    const expectedDailyOrders = selectedActivity.targetOrders ? selectedActivity.targetOrders / Math.max(days, 1) : 0;
+
     dailyData.forEach((d) => {
-      if (d.gmv < expectedDailyGmv * 0.5) {
-        alertMap.set(d.date, true);
-      }
+      const failedMetrics: string[] = [];
+      const gmvOk = !selectedActivity.targetGmv || d.gmv >= expectedDailyGmv * 0.6;
+      const ordersOk = !selectedActivity.targetOrders || d.orders >= expectedDailyOrders * 0.6;
+      const dayProfitMargin = d.gmv > 0 ? (d.profit / d.gmv) * 100 : 0;
+      const profitOk = !selectedActivity.targetProfitMargin || dayProfitMargin >= selectedActivity.targetProfitMargin * 0.6;
+      const conversionOk = !selectedActivity.targetConversionRate || d.conversionRate >= selectedActivity.targetConversionRate * 0.6;
+
+      if (!gmvOk) failedMetrics.push('成交额');
+      if (!ordersOk) failedMetrics.push('订单数');
+      if (!profitOk) failedMetrics.push('毛利率');
+      if (!conversionOk) failedMetrics.push('转化率');
+
+      alertMap.set(d.date, {
+        hasAlert: failedMetrics.length > 0,
+        failedMetrics,
+        gmvOk,
+        ordersOk,
+        profitOk,
+        conversionOk,
+      });
     });
     return alertMap;
   }, [selectedActivity, dailyData]);
@@ -369,7 +417,7 @@ export default function Dashboard() {
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   {targetAchievement.gmvRate !== null && (
                     <div className="p-4 bg-slate-50 rounded-xl">
                       <div className="flex items-center justify-between mb-2">
@@ -448,6 +496,33 @@ export default function Dashboard() {
                       </div>
                       <p className="text-xs text-slate-400 mt-2">
                         实际 {targetAchievement.profitMargin.toFixed(1)}% / 目标 {selectedActivity!.targetProfitMargin!}%
+                      </p>
+                    </div>
+                  )}
+                  {targetAchievement.conversionRate_achieved !== null && (
+                    <div className="p-4 bg-slate-50 rounded-xl">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-slate-500">转化率达成率</span>
+                        <span className={cn(
+                          'text-sm font-medium',
+                          targetAchievement.conversionRate_achieved >= 80 ? 'text-emerald-600' :
+                          targetAchievement.conversionRate_achieved >= 60 ? 'text-amber-600' : 'text-red-600'
+                        )}>
+                          {targetAchievement.conversionRate_achieved.toFixed(1)}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-200 rounded-full h-2">
+                        <div
+                          className={cn(
+                            'h-2 rounded-full transition-all',
+                            targetAchievement.conversionRate_achieved >= 80 ? 'bg-emerald-500' :
+                            targetAchievement.conversionRate_achieved >= 60 ? 'bg-amber-500' : 'bg-red-500'
+                          )}
+                          style={{ width: `${Math.min(targetAchievement.conversionRate_achieved, 100)}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-slate-400 mt-2">
+                        实际 {targetAchievement.conversionRate.toFixed(2)}% / 目标 {selectedActivity!.targetConversionRate!}%
                       </p>
                     </div>
                   )}
@@ -567,7 +642,9 @@ export default function Dashboard() {
                       const isTodayDate = isToday(date);
                       const inCurrentMonth = isCurrentMonth(date, currentYear, currentMonth);
                       const dateStr = date.toISOString().slice(0, 10);
-                      const hasAlert = dailyAlerts.get(dateStr);
+                      const dayAlert = dailyAlerts.get(dateStr);
+                      const hasAlert = dayAlert?.hasAlert;
+                      const alertCount = dayAlert?.failedMetrics.length || 0;
 
                       return (
                         <div
@@ -576,24 +653,32 @@ export default function Dashboard() {
                             'h-10 flex items-center justify-center text-sm rounded-lg relative cursor-pointer transition-all',
                             !inCurrentMonth && 'text-slate-300',
                             isTodayDate && 'bg-blue-600 text-white font-bold',
-                            hasAlert && !isTodayDate && 'bg-red-100 text-red-700 font-medium hover:bg-red-200',
+                            hasAlert && !isTodayDate && alertCount >= 3 && 'bg-red-200 text-red-800 font-bold hover:bg-red-300',
+                            hasAlert && !isTodayDate && alertCount < 3 && alertCount > 0 && 'bg-red-100 text-red-700 font-medium hover:bg-red-200',
                             hasActivity && !isTodayDate && !hasAlert && 'bg-blue-100 text-blue-700 font-medium hover:bg-blue-200',
                             !hasActivity && !isTodayDate && !hasAlert && inCurrentMonth && 'hover:bg-slate-100'
                           )}
-                          title={hasActivity ? dayActivities.map((a) => a.name).join(', ') : ''}
+                          title={hasActivity ? dayActivities.map((a) => a.name).join(', ') : (hasAlert ? `预警: ${dayAlert?.failedMetrics.join('、')}` : '')}
                           onClick={() => {
-                            if (hasActivity) {
+                            if (hasActivity || hasAlert) {
                               setSelectedCalendarDate(date);
                               setShowDayDetailModal(true);
                             }
                           }}
                         >
                           {date.getDate()}
-                          {hasActivity && (
-                            <div className={cn(
-                              'absolute bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full',
-                              hasAlert ? 'bg-red-500' : 'bg-blue-600'
-                            )} />
+                          {(hasActivity || hasAlert) && (
+                            <div className="absolute bottom-1 left-1/2 -translate-x-1/2 flex gap-0.5">
+                              {hasActivity && (
+                                <div className={cn(
+                                  'w-1 h-1 rounded-full',
+                                  hasAlert ? 'bg-red-500' : 'bg-blue-600'
+                                )} />
+                              )}
+                              {hasAlert && !hasActivity && (
+                                <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                              )}
+                            </div>
                           )}
                         </div>
                       );
@@ -889,21 +974,45 @@ export default function Dashboard() {
                       ) : (
                         <tr key={row.id} className={cn(
                           'hover:bg-slate-50 transition-colors',
-                          dailyAlerts.get(row.date) && 'bg-red-50'
+                          dailyAlerts.get(row.date)?.hasAlert && 'bg-red-50/50'
                         )}>
                           <td className="px-4 py-3 text-slate-800">
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-2">
                               {row.date}
-                              {dailyAlerts.get(row.date) && (
-                                <span title="成交额低于预期"><AlertTriangle className="w-3.5 h-3.5 text-red-500" /></span>
+                              {dailyAlerts.get(row.date)?.hasAlert && (
+                                <span
+                                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700"
+                                  title={`未达标: ${dailyAlerts.get(row.date)?.failedMetrics.join('、')}`}
+                                >
+                                  <AlertTriangle className="w-3 h-3" />
+                                  {dailyAlerts.get(row.date)?.failedMetrics.length}项
+                                </span>
                               )}
                             </div>
                           </td>
                           <td className="px-4 py-3 text-right text-slate-600">{row.visitors.toLocaleString()}</td>
-                          <td className="px-4 py-3 text-right text-slate-600">{row.orders.toLocaleString()}</td>
-                          <td className="px-4 py-3 text-right font-medium text-blue-600">{row.conversionRate.toFixed(2)}%</td>
-                          <td className="px-4 py-3 text-right font-medium text-slate-800">{formatCurrency(row.gmv)}</td>
-                          <td className={cn('px-4 py-3 text-right font-medium', row.profit >= 0 ? 'text-emerald-600' : 'text-red-600')}>
+                          <td className={cn(
+                            'px-4 py-3 text-right',
+                            dailyAlerts.get(row.date)?.ordersOk === false ? 'text-red-600 font-medium' : 'text-slate-600'
+                          )}>
+                            {row.orders.toLocaleString()}
+                          </td>
+                          <td className={cn(
+                            'px-4 py-3 text-right font-medium',
+                            dailyAlerts.get(row.date)?.conversionOk === false ? 'text-red-600' : 'text-blue-600'
+                          )}>
+                            {row.conversionRate.toFixed(2)}%
+                          </td>
+                          <td className={cn(
+                            'px-4 py-3 text-right font-medium',
+                            dailyAlerts.get(row.date)?.gmvOk === false ? 'text-red-600' : 'text-slate-800'
+                          )}>
+                            {formatCurrency(row.gmv)}
+                          </td>
+                          <td className={cn(
+                            'px-4 py-3 text-right font-medium',
+                            dailyAlerts.get(row.date)?.profitOk === false ? 'text-red-600' : (row.profit >= 0 ? 'text-emerald-600' : 'text-red-600')
+                          )}>
                             {formatCurrency(row.profit)}
                           </td>
                           <td className="px-4 py-3 text-right text-slate-600">{row.unitsSold.toLocaleString()}</td>
@@ -1130,9 +1239,9 @@ export default function Dashboard() {
       <Modal
         isOpen={showDayDetailModal}
         onClose={() => setShowDayDetailModal(false)}
-        title={selectedCalendarDate ? `${selectedCalendarDate.getFullYear()}-${String(selectedCalendarDate.getMonth() + 1).padStart(2, '0')}-${String(selectedCalendarDate.getDate()).padStart(2, '0')} 活动排期` : '活动排期'}
-        description="当天进行中的活动列表"
-        size="md"
+        title={selectedCalendarDate ? `${selectedCalendarDate.getFullYear()}-${String(selectedCalendarDate.getMonth() + 1).padStart(2, '0')}-${String(selectedCalendarDate.getDate()).padStart(2, '0')} 活动详情` : '活动详情'}
+        description="当天进行中的活动及目标完成情况"
+        size="lg"
       >
         <div className="space-y-3">
           {selectedCalendarDate && getActivitiesForDate(selectedCalendarDate, filteredCalendarActivities).length > 0 ? (
@@ -1140,10 +1249,55 @@ export default function Dashboard() {
               const actDailyData = getActivityDailyData(activity.id);
               const dayStr = selectedCalendarDate.toISOString().slice(0, 10);
               const dayData = actDailyData.find((d) => d.date === dayStr);
+              const hasTarget = activity.targetGmv || activity.targetOrders || activity.targetProfitMargin || activity.targetConversionRate;
+              const activityShops = getActivityShops(activity.id);
+
+              let metricStatus: { name: string; ok: boolean; value: string }[] = [];
+              if (dayData && hasTarget) {
+                const allDays = actDailyData.length;
+                const expectedGmv = activity.targetGmv ? activity.targetGmv / Math.max(allDays, 1) : 0;
+                const expectedOrders = activity.targetOrders ? activity.targetOrders / Math.max(allDays, 1) : 0;
+                const dayProfitMargin = dayData.gmv > 0 ? (dayData.profit / dayData.gmv) * 100 : 0;
+
+                if (activity.targetGmv) {
+                  metricStatus.push({
+                    name: '成交额',
+                    ok: dayData.gmv >= expectedGmv * 0.6,
+                    value: formatCurrency(dayData.gmv),
+                  });
+                }
+                if (activity.targetOrders) {
+                  metricStatus.push({
+                    name: '订单数',
+                    ok: dayData.orders >= expectedOrders * 0.6,
+                    value: dayData.orders + ' 单',
+                  });
+                }
+                if (activity.targetProfitMargin) {
+                  metricStatus.push({
+                    name: '毛利率',
+                    ok: dayProfitMargin >= activity.targetProfitMargin * 0.6,
+                    value: dayProfitMargin.toFixed(1) + '%',
+                  });
+                }
+                if (activity.targetConversionRate) {
+                  metricStatus.push({
+                    name: '转化率',
+                    ok: dayData.conversionRate >= activity.targetConversionRate * 0.6,
+                    value: dayData.conversionRate.toFixed(2) + '%',
+                  });
+                }
+              }
+
+              const failedCount = metricStatus.filter(m => !m.ok).length;
+
               return (
                 <div
                   key={activity.id}
-                  className="p-4 border border-slate-200 rounded-xl hover:border-blue-300 cursor-pointer transition-all"
+                  className={cn(
+                    'p-4 border rounded-xl hover:border-blue-300 cursor-pointer transition-all',
+                    failedCount > 0 ? 'border-red-200 bg-red-50/30' : 'border-slate-200'
+                  )}
                   onClick={() => {
                     setSelectedActivityId(activity.id);
                     setShowDayDetailModal(false);
@@ -1156,27 +1310,74 @@ export default function Dashboard() {
                         {statusLabels[activity.status]}
                       </Badge>
                     </div>
-                    <span className="text-xs text-slate-400">
-                      {platformLabels[activity.platform as keyof typeof platformLabels] || activity.platform}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {failedCount > 0 && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
+                          <AlertTriangle className="w-3 h-3" />
+                          {failedCount}项未达标
+                        </span>
+                      )}
+                      <span className="text-xs text-slate-400">
+                        {platformLabels[activity.platform as keyof typeof platformLabels] || activity.platform}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-4 text-sm text-slate-600">
+                  <div className="flex items-center gap-4 text-sm text-slate-600 mb-2">
                     <span>{formatDateRange(activity.startTime, activity.endTime)}</span>
                     <span>{activity.productIds.length} 件商品</span>
                   </div>
+                  {activityShops.length > 0 && (
+                    <div className="flex items-center gap-2 text-xs text-slate-500 mb-3">
+                      <Store className="w-3.5 h-3.5" />
+                      <span>涉及店铺：</span>
+                      <div className="flex flex-wrap gap-1">
+                        {activityShops.map((shop) => (
+                          <span key={shop.id} className="px-1.5 py-0.5 bg-slate-100 rounded text-slate-600">
+                            {shop.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {dayData && (
-                    <div className="grid grid-cols-3 gap-3 mt-3 pt-3 border-t border-slate-100">
-                      <div>
-                        <p className="text-xs text-slate-400">当日成交额</p>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-3 border-t border-slate-100">
+                      <div className="p-2 bg-slate-50 rounded-lg">
+                        <p className="text-xs text-slate-400">成交额</p>
                         <p className="font-medium text-slate-800">{formatCurrency(dayData.gmv)}</p>
                       </div>
-                      <div>
-                        <p className="text-xs text-slate-400">当日订单</p>
-                        <p className="font-medium text-slate-800">{dayData.orders}</p>
+                      <div className="p-2 bg-slate-50 rounded-lg">
+                        <p className="text-xs text-slate-400">订单数</p>
+                        <p className="font-medium text-slate-800">{dayData.orders} 单</p>
                       </div>
-                      <div>
+                      <div className="p-2 bg-slate-50 rounded-lg">
+                        <p className="text-xs text-slate-400">毛利率</p>
+                        <p className="font-medium text-slate-800">
+                          {dayData.gmv > 0 ? ((dayData.profit / dayData.gmv) * 100).toFixed(1) : '0'}%
+                        </p>
+                      </div>
+                      <div className="p-2 bg-slate-50 rounded-lg">
                         <p className="text-xs text-slate-400">转化率</p>
                         <p className="font-medium text-slate-800">{dayData.conversionRate.toFixed(2)}%</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {metricStatus.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-slate-100">
+                      <p className="text-xs text-slate-500 mb-2">目标完成情况</p>
+                      <div className="flex flex-wrap gap-2">
+                        {metricStatus.map((m, idx) => (
+                          <span
+                            key={idx}
+                            className={cn(
+                              'inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs',
+                              m.ok ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                            )}
+                          >
+                            {m.ok ? '✓' : '✗'} {m.name}: {m.value}
+                          </span>
+                        ))}
                       </div>
                     </div>
                   )}
